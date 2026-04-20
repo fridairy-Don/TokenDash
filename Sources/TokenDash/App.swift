@@ -19,6 +19,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem!
     private var popover: NSPopover!
     private var standaloneWindow: NSWindow?
+    private var warmupWindow: NSWindow?
     var store: DataStore!
     private var cancellables: Set<AnyCancellable> = []
     private var globalHotkeyMonitor: Any?
@@ -36,7 +37,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         popover.contentSize = NSSize(width: 420, height: 640)
         let root = DashboardWebView()
             .environmentObject(store)
-        popover.contentViewController = NSHostingController(rootView: root)
+        let hosting = NSHostingController(rootView: root)
+        hosting.view.frame = NSRect(x: 0, y: 0, width: 420, height: 640)
+        popover.contentViewController = hosting
+        // Warm the WKWebView at launch so Babel finishes compiling JSX in the
+        // background before the user ever clicks the menu-bar icon. Without
+        // this, the first popover open takes ~5s for the dashboard to appear.
+        // The trick: host the view in an offscreen window so
+        // NSViewRepresentable.makeNSView fires, WKWebView gets created, and
+        // loadFileURL + Babel run while the user is still moving their mouse.
+        // When the popover shows, AppKit reparents the view into the popover's
+        // own window and the webview keeps its cached state.
+        let warmup = NSWindow(
+            contentRect: NSRect(x: -20000, y: -20000, width: 420, height: 640),
+            styleMask: [.borderless], backing: .buffered, defer: false
+        )
+        warmup.alphaValue = 0
+        warmup.ignoresMouseEvents = true
+        warmup.contentView = hosting.view
+        warmup.orderFront(nil)
+        self.warmupWindow = warmup
 
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         configureStatusButton()
@@ -108,7 +128,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         settings.target = self
         menu.addItem(settings)
 
-        let window = NSMenuItem(title: "Open Dashboard in Window", action: #selector(openStandaloneWindow), keyEquivalent: "o")
+        let window = NSMenuItem(title: "Open Dashboard in Window", action: #selector(openStandaloneWindow(_:)), keyEquivalent: "o")
         window.target = self
         menu.addItem(window)
 
@@ -174,39 +194,55 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         ])
     }
 
-    @objc private func openStandaloneWindow() {
+    @objc private func openStandaloneWindow(_ sender: Any?) {
+        // Dispatch async so the context menu fully dismisses before we try to
+        // create/present a new window — otherwise macOS eats the new window as
+        // part of the menu's tear-down animation.
+        DispatchQueue.main.async { [weak self] in
+            self?.reallyOpenStandaloneWindow()
+        }
+    }
+
+    private func reallyOpenStandaloneWindow() {
         if popover.isShown { popover.performClose(nil) }
 
-        // Re-show existing window if already open.
-        if let win = standaloneWindow, win.isVisible {
+        // Reuse existing window if it's still alive.
+        if let win = standaloneWindow {
+            win.makeKeyAndOrderFront(nil)
             win.orderFrontRegardless()
             return
         }
 
-        // Build fresh window each time so the WebView always starts clean.
-        standaloneWindow = nil
-
-        let root = DashboardWebView().environmentObject(store)
+        let root = DashboardWebView()
+            .environmentObject(store)
+            .frame(width: 460, height: 720)
         let hosting = NSHostingController(rootView: root)
+        hosting.view.frame = NSRect(x: 0, y: 0, width: 460, height: 720)
 
-        let win = NSWindow(
+        // NSPanel with .nonactivatingPanel so we don't need to switch
+        // activation policy just to show a window from an agent app.
+        let panel = NSPanel(
             contentRect: NSRect(x: 0, y: 0, width: 460, height: 720),
-            styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
+            styleMask: [.titled, .closable, .resizable, .nonactivatingPanel],
             backing: .buffered, defer: false
         )
-        win.title = "TokenDash"
-        win.titleVisibility = .hidden
-        win.titlebarAppearsTransparent = true
-        win.contentViewController = hosting
-        win.isReleasedWhenClosed = false
-        win.level = .floating          // float above other apps without needing focus
-        win.center()
-        standaloneWindow = win
+        panel.title = "TokenDash"
+        panel.contentViewController = hosting
+        // NSHostingController can report 0 intrinsic size before SwiftUI lays
+        // out — force a real content size so the panel doesn't collapse to 1×24.
+        panel.setContentSize(NSSize(width: 460, height: 720))
+        panel.minSize = NSSize(width: 360, height: 480)
+        panel.isReleasedWhenClosed = false
+        panel.isFloatingPanel = true
+        panel.level = .floating
+        panel.hidesOnDeactivate = false
+        panel.becomesKeyOnlyIfNeeded = false
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        panel.center()
+        standaloneWindow = panel
 
-        // orderFrontRegardless() is the correct API for LSUIElement / accessory
-        // apps — it brings the window to front without requiring the app to be
-        // the active application or changing the activation policy.
-        win.orderFrontRegardless()
+        panel.makeKeyAndOrderFront(nil)
+        panel.orderFrontRegardless()
     }
 
     // MARK: - Global hotkey (⌥⌘T)
