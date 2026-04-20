@@ -15,7 +15,7 @@ struct TokenDashApp: App {
 }
 
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var statusItem: NSStatusItem!
     private var popover: NSPopover!
     private var standaloneWindow: NSWindow?
@@ -176,11 +176,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func openStandaloneWindow() {
         if popover.isShown { popover.performClose(nil) }
+
+        // Accessory-policy apps can't bring windows to front with just activate().
+        // Temporarily switch to .regular so the window receives focus, then
+        // restore when it closes.
+        NSApp.setActivationPolicy(.regular)
+
         if let win = standaloneWindow {
             NSApp.activate(ignoringOtherApps: true)
             win.makeKeyAndOrderFront(nil)
             return
         }
+
         let root = DashboardWebView().environmentObject(store)
         let hosting = NSHostingController(rootView: root)
         let win = NSWindow(
@@ -194,9 +201,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         win.contentViewController = hosting
         win.center()
         win.isReleasedWhenClosed = false
+        win.delegate = self          // watch for close to restore .accessory
         standaloneWindow = win
         NSApp.activate(ignoringOtherApps: true)
         win.makeKeyAndOrderFront(nil)
+    }
+
+    // MARK: - NSWindowDelegate
+
+    nonisolated func windowWillClose(_ notification: Notification) {
+        // Restore accessory policy when the standalone window is closed so the
+        // Dock icon and app switcher entry disappear again.
+        DispatchQueue.main.async {
+            NSApp.setActivationPolicy(.accessory)
+        }
     }
 
     // MARK: - Global hotkey (⌥⌘T)
