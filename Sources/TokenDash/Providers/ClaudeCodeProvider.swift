@@ -40,6 +40,7 @@ final class ClaudeCodeProvider: UsageProvider {
         var week = TokenTotals()
         var byModelMonth: [String: TokenTotals] = [:]
         var byModelToday: [String: TokenTotals] = [:]
+        var byProjectWeek: [String: TokenTotals] = [:]
         var dailyBuckets = Array(repeating: 0, count: 7)   // 0 = 6d ago, 6 = today
         var sessionsToday: [String: SessionAccum] = [:]
         var totalFilesScanned = 0
@@ -48,6 +49,7 @@ final class ClaudeCodeProvider: UsageProvider {
             if let mod = try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate,
                mod < scanCutoff { continue }
             totalFilesScanned += 1
+            let projectName = Self.projectName(from: url)
             parseFile(url: url) { ts, model, sessionId, tot in
                 if ts >= startOfMonth {
                     month += tot
@@ -55,6 +57,7 @@ final class ClaudeCodeProvider: UsageProvider {
                 }
                 if ts >= sevenDaysAgo {
                     week += tot
+                    byProjectWeek[projectName, default: .init()] += tot
                     let dayStart = cal.startOfDay(for: ts)
                     let daysAgo = cal.dateComponents([.day], from: dayStart, to: startOfToday).day ?? 0
                     let idx = 6 - daysAgo
@@ -124,6 +127,35 @@ final class ClaudeCodeProvider: UsageProvider {
 
         let state: ProviderState = (today.billableTotal == 0 && month.billableTotal == 0) ? .empty : .ok
 
+        // Top 5 projects by billable tokens this week.
+        let topProjects = byProjectWeek
+            .filter { $0.value.billableTotal > 0 }
+            .sorted { $0.value.billableTotal > $1.value.billableTotal }
+            .prefix(5)
+            .map { (name, totals) -> [String: Any] in
+                ["name": name, "tokens": Fmt.tokens(totals.billableTotal), "raw": totals.billableTotal]
+            }
+
+        // Cache hit rate = cacheRead / (cacheRead + input + cacheWrite).
+        // High rate => you're getting discount reads; low rate => you might be
+        // breaking cache with frequent prompt changes or long idle gaps.
+        let effectiveInput = today.inputTokens + today.cacheWriteTokens + today.cacheReadTokens
+        let cacheHitRate: Int = effectiveInput > 0
+            ? Int(round(Double(today.cacheReadTokens) / Double(effectiveInput) * 100))
+            : 0
+
+        var extras: [String: String] = [
+            "billable": "\(today.billableTotal)",
+            "cacheHitRate": "\(cacheHitRate)",
+            "cacheReadToday": Fmt.tokens(today.cacheReadTokens),
+            "cacheWriteToday": Fmt.tokens(today.cacheWriteTokens),
+        ]
+        if !topProjects.isEmpty,
+           let data = try? JSONSerialization.data(withJSONObject: topProjects),
+           let s = String(data: data, encoding: .utf8) {
+            extras["topProjects"] = s
+        }
+
         return ProviderSnapshot(
             id: id,
             title: displayName,
@@ -145,8 +177,25 @@ final class ClaudeCodeProvider: UsageProvider {
             detail: detail,
             warningLevel: 0,
             state: state,
-            note: state == .empty ? "No billable tokens this month." : nil
+            note: state == .empty ? "No billable tokens this month." : nil,
+            extras: extras
         )
+    }
+
+    /// Extract a human-friendly project name from a Claude Code session path.
+    /// Claude stores sessions under `~/.claude/projects/<slug>/<session>.jsonl`
+    /// where <slug> is the escaped absolute project path. We take the last
+    /// component after slash escapes.
+    private static func projectName(from url: URL) -> String {
+        let parent = url.deletingLastPathComponent().lastPathComponent
+        if parent.isEmpty { return "—" }
+        // Slugs look like "-Users-xiaoxiannv-Downloads-TokenDash".
+        // Take the trailing segment.
+        let parts = parent.split(separator: "-")
+        if let last = parts.last, !last.isEmpty {
+            return String(last)
+        }
+        return parent
     }
 
     private func topModelShares(from dict: [String: TokenTotals]) -> [ModelShare] {

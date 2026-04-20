@@ -7,7 +7,10 @@ let package = Package(
     targets: [
         .executableTarget(
             name: "TokenDash",
-            path: "Sources/TokenDash"
+            path: "Sources/TokenDash",
+            linkerSettings: [
+                .linkedLibrary("sqlite3"),
+            ]
         )
     ]
 )

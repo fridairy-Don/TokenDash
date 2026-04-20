@@ -126,6 +126,73 @@ function Sparkline({ data, width = 84, height = 26, stroke = '#CC785C', fill, do
   );
 }
 
+// Micro bar chart for daily deltas (history7). Crisper at small sizes than
+// a line sparkline because each bar maps 1:1 to a day.
+function Sparkbars({ data, width = 86, height = 22, color = '#CC785C', dim = '#E6DDD0', todayHighlight = true }) {
+  if (!data || data.length === 0) return null;
+  const max = Math.max(...data, 1);
+  const gap = 2;
+  const barW = Math.max(1, (width - gap * (data.length - 1)) / data.length);
+  return (
+    <svg width={width} height={height} style={{ display: 'block' }}>
+      {data.map((v, i) => {
+        const h = Math.max(v > 0 ? 1.5 : 0.5, (v / max) * (height - 2));
+        const x = i * (barW + gap);
+        const y = height - h;
+        const isToday = todayHighlight && i === data.length - 1;
+        return (
+          <rect key={i} x={x} y={y} width={barW} height={h} rx={1}
+                fill={isToday ? color : dim} />
+        );
+      })}
+    </svg>
+  );
+}
+
+function TrendChip({ label, t }) {
+  if (!label || label === 'flat') return null;
+  const up = label.startsWith('+');
+  const dark = t.ink === VD2_DARK.ink;
+  const fg = up
+    ? (dark ? TD.dCoral : '#B85A3B')
+    : (dark ? TD.dGreen : '#5B7A4C');
+  const bg = up
+    ? (dark ? 'rgba(204,120,92,0.14)' : '#F6E6DD')
+    : (dark ? 'rgba(143,168,124,0.14)' : '#E8EEDE');
+  return (
+    <span style={{
+      display: 'inline-flex', alignItems: 'center', gap: 2,
+      fontFamily: TD_FONTS.mono, fontSize: 10, color: fg,
+      background: bg, padding: '1px 6px', borderRadius: 99,
+      fontVariantNumeric: 'tabular-nums', letterSpacing: 0.2,
+    }}>{up ? '↗' : '↘'} {label.replace(/^[+-]/, '')}</span>
+  );
+}
+
+// Single-line rank list: "Claude 3.5 Sonnet      $8.42"
+function TopList({ rows, t, valueKey = 'tokens' }) {
+  if (!rows || rows.length === 0) return null;
+  return (
+    <div style={{ marginTop: 10 }}>
+      {rows.map((r, i) => (
+        <div key={i} style={{
+          display: 'grid', gridTemplateColumns: '14px 1fr auto', gap: 8,
+          fontSize: 11, padding: '4px 0',
+          color: t.muted, fontFamily: TD_FONTS.sans,
+          borderBottom: i < rows.length - 1 ? `1px solid ${t.hair}` : 'none',
+          alignItems: 'baseline',
+        }}>
+          <span style={{ color: t.dim, fontFamily: TD_FONTS.mono, fontSize: 10 }}>{i + 1}</span>
+          <span style={{ color: t.ink, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.name}</span>
+          <span style={{ fontFamily: TD_FONTS.mono, color: t.ink, fontVariantNumeric: 'tabular-nums' }}>
+            {r[valueKey] != null ? r[valueKey] : (r.spend || r.tokens)}
+          </span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function QuotaBar({ pct, warn = false, dark = false }) {
   const track = dark ? TD.dBorder : '#EDE7D8';
   const isHot = warn || pct >= 85;
@@ -502,10 +569,49 @@ function VD2_ClaudeHero({ t, expanded, onToggle }) {
 // since 7-day / Month / bar chart got promoted to the primary view.
 function VD2_ClaudeDrawer({ t, d }) {
   const hasSessions = d.topSessions && d.topSessions.length > 0;
+  const hasProjects = d.topProjects && d.topProjects.length > 0;
+  const hitRate = (typeof d.cacheHitRate === 'number') ? d.cacheHitRate : null;
   return (
     <div
       onClick={(e) => e.stopPropagation()}
       style={{ marginTop: 14, paddingTop: 14, borderTop: `1px solid ${t.border}` }}>
+
+      {/* Cache hit rate — a number most Claude Code users have never seen */}
+      {hitRate !== null && (
+        <div style={{
+          display: 'flex', alignItems: 'baseline', justifyContent: 'space-between',
+          marginBottom: 10, paddingBottom: 10, borderBottom: `1px solid ${t.hair}`,
+        }}>
+          <div>
+            <div style={{
+              fontFamily: TD_FONTS.serif, fontStyle: 'italic', fontSize: 12, color: t.ink,
+            }}>Prompt cache hit rate</div>
+            <div style={{
+              fontFamily: TD_FONTS.serif, fontStyle: 'italic', fontSize: 10.5, color: t.dim, marginTop: 2,
+            }}>cached reads ÷ total input</div>
+          </div>
+          <div style={{ textAlign: 'right' }}>
+            <div style={{
+              fontFamily: TD_FONTS.mono, fontSize: 22, color: t.ink,
+              fontVariantNumeric: 'tabular-nums', letterSpacing: -0.5,
+            }}>{hitRate}%</div>
+            <div style={{
+              fontFamily: TD_FONTS.serif, fontStyle: 'italic', fontSize: 10, color: t.dim,
+            }}>{hitRate >= 60 ? 'healthy' : hitRate >= 30 ? 'ok' : 'low — prompts change often?'}</div>
+          </div>
+        </div>
+      )}
+
+      {/* Top projects this week */}
+      {hasProjects && (
+        <div style={{ marginBottom: 12, paddingBottom: 10, borderBottom: `1px solid ${t.hair}` }}>
+          <div style={{
+            fontFamily: TD_FONTS.serif, fontStyle: 'italic', fontSize: 12, color: t.ink, marginBottom: 4,
+          }}>Top projects this week</div>
+          <TopList rows={d.topProjects} t={t} valueKey="tokens" />
+        </div>
+      )}
+
       <div style={{
         marginBottom: 8,
         fontFamily: TD_FONTS.serif, fontStyle: 'italic', fontSize: 12, color: t.ink,
@@ -842,29 +948,97 @@ function VD2_Eleven({ t, d }) {
           )}
         </div>
       </div>
+
+      {/* 7-day requests sparkbar */}
+      {d.history7 && d.history7.length > 0 && (
+        <div style={{
+          marginTop: 10, display: 'flex', alignItems: 'center', gap: 10,
+        }}>
+          <Sparkbars data={d.history7} color={dark ? TD.dGold : '#C89464'} dim={dark ? '#3A332C' : '#EEE4D1'} />
+          <span style={{
+            fontFamily: TD_FONTS.serif, fontStyle: 'italic',
+            fontSize: 10.5, color: t.dim,
+          }}>7d reqs</span>
+          <span style={{ flex: 1 }} />
+          <TrendChip label={d.historyTrend} t={t} />
+        </div>
+      )}
     </div>
   );
 }
 
 function VD2_Router({ t, d }) {
-  return (
-    <VD2_Compact t={t}>
-      <Monogram letter="O" t={t} tone="payg" />
-      <div style={{ minWidth: 0 }}>
-        <div style={{ fontSize: 12, fontWeight: 600, color: t.ink, display: 'flex', alignItems: 'center', gap: 6, whiteSpace: 'nowrap' }}>
-          {d.name}<Pill t={t} tone="payg">{d.pill}</Pill>
+  const [expanded, setExpanded] = React.useState(false);
+  const dark = t.ink === VD2_DARK.ink;
+  const hasDetail = (d.history7 && d.history7.length > 0) || (d.topModels && d.topModels.length > 0);
+  const coral = dark ? TD.dCoral : TD.coral;
+
+  if (!d.credits) {
+    // Unconfigured / error fallback — keep old flat layout.
+    return (
+      <VD2_Compact t={t}>
+        <Monogram letter="O" t={t} tone="payg" />
+        <div style={{ minWidth: 0 }}>
+          <div style={{ fontSize: 12, fontWeight: 600, color: t.muted, display: 'flex', alignItems: 'center', gap: 6, whiteSpace: 'nowrap' }}>
+            {d.name}<Pill t={t} tone="payg">{d.pill}</Pill>
+          </div>
+          {d.note && <div style={{ fontFamily: TD_FONTS.serif, fontStyle: 'italic', fontSize: 11, color: t.dim, marginTop: 3 }}>{d.note}</div>}
         </div>
-        {d.spendLabel && <div style={{ fontFamily: TD_FONTS.mono, fontSize: 10.5, color: t.dim, marginTop: 3, whiteSpace: 'nowrap' }}>{d.spendLabel}</div>}
-        {d.note && !d.spendLabel && <div style={{ fontFamily: TD_FONTS.serif, fontStyle: 'italic', fontSize: 11, color: t.dim, marginTop: 3 }}>{d.note}</div>}
-      </div>
-      <div style={{ flex: 1 }} />
-      {d.credits && (
+      </VD2_Compact>
+    );
+  }
+  return (
+    <div
+      onClick={() => hasDetail && setExpanded(e => !e)}
+      style={{
+        background: t.compactBg,
+        border: `1px solid ${dark ? 'rgba(237,230,214,0.06)' : 'rgba(60,45,30,0.04)'}`,
+        borderRadius: 10, padding: '12px 14px', marginBottom: 8,
+        cursor: hasDetail ? 'pointer' : 'default',
+      }}>
+      {/* Header row */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        <Monogram letter="O" t={t} tone="payg" />
+        <div style={{ minWidth: 0 }}>
+          <div style={{ fontSize: 12, fontWeight: 600, color: t.ink, display: 'flex', alignItems: 'center', gap: 6, whiteSpace: 'nowrap' }}>
+            {d.name}<Pill t={t} tone="payg">{d.pill}</Pill>
+          </div>
+          {d.spendLabel && <div style={{ fontFamily: TD_FONTS.mono, fontSize: 10.5, color: t.dim, marginTop: 3, whiteSpace: 'nowrap' }}>{d.spendLabel}</div>}
+        </div>
+        <div style={{ flex: 1 }} />
         <div style={{ textAlign: 'right' }}>
           <div style={{ fontFamily: TD_FONTS.mono, fontSize: 15, color: t.ink, fontVariantNumeric: 'tabular-nums', letterSpacing: -0.3, lineHeight: 1 }}>{d.credits}</div>
           <div style={{ fontFamily: TD_FONTS.serif, fontStyle: 'italic', fontSize: 10, color: t.dim, marginTop: 4 }}>left</div>
         </div>
+      </div>
+
+      {/* Sparkbars row — daily spend for last 7 days */}
+      {d.history7 && d.history7.length > 0 && (
+        <div style={{
+          marginTop: 10, display: 'flex', alignItems: 'center', gap: 10,
+        }}>
+          <Sparkbars data={d.history7} color={coral} dim={dark ? '#3A332C' : '#E6DDD0'} />
+          <span style={{
+            fontFamily: TD_FONTS.serif, fontStyle: 'italic',
+            fontSize: 10.5, color: t.dim,
+          }}>7d spend</span>
+          <span style={{ flex: 1 }} />
+          <TrendChip label={d.historyTrend} t={t} />
+        </div>
       )}
-    </VD2_Compact>
+
+      {/* Expanded: top models */}
+      {expanded && d.topModels && d.topModels.length > 0 && (
+        <div onClick={(e) => e.stopPropagation()} style={{
+          marginTop: 12, paddingTop: 10, borderTop: `1px solid ${t.hair}`,
+        }}>
+          <div style={{
+            fontFamily: TD_FONTS.serif, fontStyle: 'italic', fontSize: 11, color: t.ink, marginBottom: 2,
+          }}>Top models (7d)</div>
+          <TopList rows={d.topModels} t={t} valueKey="spend" />
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -1010,6 +1184,15 @@ function VD2_Settings({ t, theme, setTheme, onResetOrder, orderDirty }) {
         <KeyRow t={t} label="ElevenLabs" account="elevenlabs" hasKey={!!ks.elevenlabs} />
         <KeyRow t={t} label="OpenRouter" account="openrouter" hasKey={!!ks.openrouter} />
         <KeyRow t={t} label="Groq" account="groq" hasKey={!!ks.groq} />
+        <div style={{
+          marginTop: 10, padding: '8px 10px', borderRadius: 6,
+          background: dark ? 'rgba(143,168,124,0.06)' : 'rgba(143,168,124,0.10)',
+          fontFamily: TD_FONTS.sans, fontSize: 10.5, color: t.dim, lineHeight: 1.45,
+        }}>
+          <span style={{ color: t.muted, fontWeight: 600 }}>Tip —</span> add keys here,
+          not via the <code style={{ fontFamily: TD_FONTS.mono, fontSize: 10 }}>security</code> CLI.
+          CLI-added items aren't readable by this app due to Keychain ACLs.
+        </div>
       </SectionCard>
 
       <SectionCard t={t}>

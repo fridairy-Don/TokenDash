@@ -82,7 +82,33 @@ extension DataStore {
             ]
         }
 
+        // M3 additions: cache hit rate + top projects (from extras)
+        if let hit = s.extras["cacheHitRate"], let n = Int(hit) {
+            out["cacheHitRate"] = n
+        }
+        if let cr = s.extras["cacheReadToday"]   { out["cacheReadToday"]  = cr }
+        if let cw = s.extras["cacheWriteToday"]  { out["cacheWriteToday"] = cw }
+        if let projectsJSON = s.extras["topProjects"],
+           let data = projectsJSON.data(using: .utf8),
+           let arr = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] {
+            out["topProjects"] = arr
+        }
+        attachHistory(snap: s, into: &out)
+
         return out
+    }
+
+    // Inject history7 / historyMax / historyTrend from extras into a payload dict
+    // as real JSON values (array of numbers + string), so the JS side doesn't
+    // need to parse CSV.
+    private static func attachHistory(snap: ProviderSnapshot, into out: inout [String: Any]) {
+        if let csv = snap.extras["history7"] {
+            let nums = csv.split(separator: ",").compactMap { Double($0) }
+            if !nums.isEmpty { out["history7"] = nums }
+        }
+        if let m = snap.extras["historyMax"], let n = Double(m) { out["historyMax"] = n }
+        if let u = snap.extras["historyUnit"]   { out["historyUnit"] = u }
+        if let t = snap.extras["historyTrend"]  { out["historyTrend"] = t }
     }
 
     private static func codexPayload(_ s: ProviderSnapshot) -> [String: Any] {
@@ -117,6 +143,7 @@ extension DataStore {
                 "duration": session.duration,
             ]
         }
+        attachHistory(snap: s, into: &out)
         return out
     }
 
@@ -138,11 +165,23 @@ extension DataStore {
         if let note = s.note { out["note"] = note }
 
         // Forward everything in extras. Parse pct back to a number so the JS
-        // InlineBar can render it without doing its own parseInt.
+        // InlineBar can render it without doing its own parseInt. history7 and
+        // topModels/topProjects are expanded from their CSV/JSON string form.
         for (k, v) in s.extras {
-            if k == "pct", let n = Int(v) {
-                out[k] = n
-            } else {
+            switch k {
+            case "pct":
+                if let n = Int(v) { out[k] = n } else { out[k] = v }
+            case "history7":
+                let nums = v.split(separator: ",").compactMap { Double($0) }
+                if !nums.isEmpty { out["history7"] = nums }
+            case "historyMax":
+                if let n = Double(v) { out["historyMax"] = n }
+            case "topModels", "topProjects":
+                if let data = v.data(using: .utf8),
+                   let arr = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] {
+                    out[k] = arr
+                }
+            default:
                 out[k] = v
             }
         }

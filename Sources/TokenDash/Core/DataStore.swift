@@ -37,7 +37,7 @@ final class DataStore: ObservableObject {
         }
 
         let providers = self.providers
-        let results: [ProviderSnapshot] = await withTaskGroup(of: (Int, ProviderSnapshot).self) { group in
+        var results: [ProviderSnapshot] = await withTaskGroup(of: (Int, ProviderSnapshot).self) { group in
             for (idx, p) in providers.enumerated() {
                 group.addTask { (idx, await p.snapshot()) }
             }
@@ -46,6 +46,24 @@ final class DataStore: ObservableObject {
             indexed.sort { $0.0 < $1.0 }
             return indexed.map { $0.1 }
         }
+
+        // Persist every non-error snapshot so we can draw sparklines and
+        // detect anomalies. Errors/unconfigured are skipped so a transient
+        // outage doesn't nuke the baseline.
+        for snap in results where snap.state == .ok {
+            PersistentStore.shared.record(snapshot: snap)
+        }
+
+        // Hydrate each snapshot with its 7-day history from the DB so the JSON
+        // payload can carry sparklines without the UI having to fetch them.
+        for i in results.indices {
+            results[i] = HistoryHydrator.attachHistory(to: results[i])
+        }
+
+        // Anomaly detection — raises a UNUserNotification if today's value is
+        // statistically far from the per-provider baseline.
+        AnomalyDetector.shared.check(snapshots: results)
+
         self.snapshots = results
     }
 }

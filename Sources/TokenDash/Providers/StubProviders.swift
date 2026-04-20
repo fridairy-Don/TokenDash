@@ -103,11 +103,11 @@ final class ElevenLabsProvider: UsageProvider {
     }
 
     private func fetchSubscription(key: String) async throws -> SubscriptionResponse {
-        var req = URLRequest(url: URL(string: "https://api.elevenlabs.io/v1/user/subscription")!)
-        req.setValue(key, forHTTPHeaderField: "xi-api-key")
-        req.timeoutInterval = 10
-        let (data, _) = try await URLSession.shared.data(for: req)
-        return try JSONDecoder().decode(SubscriptionResponse.self, from: data)
+        try await APIClient.shared.getJSON(
+            SubscriptionResponse.self,
+            url: URL(string: "https://api.elevenlabs.io/v1/user/subscription")!,
+            headers: ["xi-api-key": key]
+        )
     }
 
     // Paginate through /v1/history and count TTS requests in the last 2 days.
@@ -126,10 +126,7 @@ final class ElevenLabsProvider: UsageProvider {
                 urlStr += "&start_after_history_item_id=\(sa)"
             }
             guard let url = URL(string: urlStr) else { break }
-            var req = URLRequest(url: url)
-            req.setValue(key, forHTTPHeaderField: "xi-api-key")
-            req.timeoutInterval = 10
-            let (data, _) = try await URLSession.shared.data(for: req)
+            let data = try await APIClient.shared.getData(url: url, headers: ["xi-api-key": key])
             guard let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let items = obj["history"] as? [[String: Any]] else { break }
             var hitOld = false
@@ -171,16 +168,40 @@ final class OpenRouterProvider: UsageProvider {
             let remaining = max(0, c.total_credits - c.total_usage)
             let headline = String(format: "$%.2f", remaining)
             let spend = String(format: "$%.2f spent", c.total_usage)
+
+            // Top models over the last 7 days, best-effort. This endpoint needs
+            // additional OAuth scopes in some accounts — failure is silent, the
+            // card still shows credits.
+            var topModels: [[String: Any]] = []
+            if let activity = try? await fetchActivity(key: key) {
+                topModels = activity.prefix(3).map { entry in
+                    [
+                        "name":   entry.name,
+                        "spend":  String(format: "$%.2f", entry.spend),
+                        "reqs":   entry.requests,
+                    ]
+                }
+            }
+
+            var extras: [String: String] = [
+                "credits": headline,
+                "spendLabel": spend,
+                "spendUsd": String(c.total_usage),
+                "creditsUsd": String(remaining),
+            ]
+            if !topModels.isEmpty,
+               let data = try? JSONSerialization.data(withJSONObject: topModels),
+               let s = String(data: data, encoding: .utf8) {
+                extras["topModels"] = s
+            }
+
             return ProviderSnapshot(
                 id: id, title: displayName, subtitle: "Pay-as-you-go",
                 glyph: "O", accent: .ocean, size: .compact,
                 headline: headline, headlineCaption: "credits left",
                 state: .ok,
                 note: spend,
-                extras: [
-                    "credits": headline,
-                    "spendLabel": spend,
-                ]
+                extras: extras
             )
         } catch {
             return ProviderSnapshot(
@@ -210,11 +231,69 @@ final class OpenRouterProvider: UsageProvider {
     }
 
     private func fetchCredits(key: String) async throws -> CreditsData {
-        var req = URLRequest(url: URL(string: "https://openrouter.ai/api/v1/credits")!)
-        req.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
-        req.timeoutInterval = 10
-        let (data, _) = try await URLSession.shared.data(for: req)
-        return (try JSONDecoder().decode(CreditsEnvelope.self, from: data)).data
+        let envelope = try await APIClient.shared.getJSON(
+            CreditsEnvelope.self,
+            url: URL(string: "https://openrouter.ai/api/v1/credits")!,
+            headers: ["Authorization": "Bearer \(key)"]
+        )
+        return envelope.data
+    }
+
+    // MARK: Activity breakdown
+
+    // OpenRouter /api/v1/activity returns per-day rows with model + spend.
+    // We collapse by model over the last 7 days. This endpoint may 404 on
+    // some accounts — that's fine, we treat it as "no breakdown available".
+    struct ActivityEntry {
+        var name: String
+        var spend: Double
+        var requests: Int
+    }
+
+    private func fetchActivity(key: String) async throws -> [ActivityEntry] {
+        let data = try await APIClient.shared.getData(
+            url: URL(string: "https://openrouter.ai/api/v1/activity")!,
+            headers: ["Authorization": "Bearer \(key)"]
+        )
+        guard let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let rows = obj["data"] as? [[String: Any]] else { return [] }
+
+        let cutoff = Calendar.current.date(byAdding: .day, value: -7, to: Date()) ?? Date()
+        let iso = ISO8601DateFormatter()
+
+        var byModel: [String: ActivityEntry] = [:]
+        for row in rows {
+            // Accept either "date" (YYYY-MM-DD) or "timestamp".
+            let dateStr = (row["date"] as? String)
+                ?? (row["timestamp"] as? String)
+                ?? ""
+            let df = DateFormatter()
+            df.dateFormat = "yyyy-MM-dd"
+            df.locale = Locale(identifier: "en_US_POSIX")
+            let d = df.date(from: dateStr) ?? iso.date(from: dateStr)
+            if let d, d < cutoff { continue }
+
+            let model = (row["model"] as? String)
+                ?? (row["model_permaslug"] as? String)
+                ?? "unknown"
+            let spend = (row["usage"] as? Double)
+                ?? (row["cost"] as? Double)
+                ?? (row["total_cost"] as? Double)
+                ?? 0
+            let reqs = (row["requests"] as? Int) ?? (row["total_requests"] as? Int) ?? 1
+
+            var e = byModel[model, default: .init(name: Self.prettyModel(model), spend: 0, requests: 0)]
+            e.spend += spend
+            e.requests += reqs
+            byModel[model] = e
+        }
+        return byModel.values.sorted { $0.spend > $1.spend }
+    }
+
+    private static func prettyModel(_ raw: String) -> String {
+        // "anthropic/claude-3.5-sonnet" → "claude 3.5 sonnet"
+        let last = raw.split(separator: "/").last.map(String.init) ?? raw
+        return last.replacingOccurrences(of: "-", with: " ")
     }
 }
 
