@@ -15,7 +15,7 @@ struct TokenDashApp: App {
 }
 
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem!
     private var popover: NSPopover!
     private var standaloneWindow: NSWindow?
@@ -177,44 +177,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     @objc private func openStandaloneWindow() {
         if popover.isShown { popover.performClose(nil) }
 
-        // Accessory-policy apps can't bring windows to front with just activate().
-        // Temporarily switch to .regular so the window receives focus, then
-        // restore when it closes.
-        NSApp.setActivationPolicy(.regular)
-
-        if let win = standaloneWindow {
-            NSApp.activate(ignoringOtherApps: true)
-            win.makeKeyAndOrderFront(nil)
+        // Re-show existing window if already open.
+        if let win = standaloneWindow, win.isVisible {
+            win.orderFrontRegardless()
             return
         }
 
+        // Build fresh window each time so the WebView always starts clean.
+        standaloneWindow = nil
+
         let root = DashboardWebView().environmentObject(store)
         let hosting = NSHostingController(rootView: root)
+
         let win = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 460, height: 720),
             styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
             backing: .buffered, defer: false
         )
+        win.title = "TokenDash"
         win.titleVisibility = .hidden
         win.titlebarAppearsTransparent = true
-        win.title = "TokenDash"
         win.contentViewController = hosting
-        win.center()
         win.isReleasedWhenClosed = false
-        win.delegate = self          // watch for close to restore .accessory
+        win.level = .floating          // float above other apps without needing focus
+        win.center()
         standaloneWindow = win
-        NSApp.activate(ignoringOtherApps: true)
-        win.makeKeyAndOrderFront(nil)
-    }
 
-    // MARK: - NSWindowDelegate
-
-    nonisolated func windowWillClose(_ notification: Notification) {
-        // Restore accessory policy when the standalone window is closed so the
-        // Dock icon and app switcher entry disappear again.
-        DispatchQueue.main.async {
-            NSApp.setActivationPolicy(.accessory)
-        }
+        // orderFrontRegardless() is the correct API for LSUIElement / accessory
+        // apps — it brings the window to front without requiring the app to be
+        // the active application or changing the activation policy.
+        win.orderFrontRegardless()
     }
 
     // MARK: - Global hotkey (⌥⌘T)
