@@ -70,6 +70,9 @@ final class ElevenLabsProvider: UsageProvider {
                     "reqsYesterday": "\(counts.yesterday)",
                     "reqTrend": reqTrend,
                     "charsToday": Fmt.int(counts.charsToday),
+                    // For PersistentStore: billable = cycle character usage,
+                    // useful as a secondary metric for char-consumption sparklines.
+                    "billable": "\(used)",
                 ]
             )
         } catch {

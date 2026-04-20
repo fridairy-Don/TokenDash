@@ -19,6 +19,7 @@ const TD_FONTS = {
 const TD = {
   coral: '#CC785C', green: '#6B8E5A', red: '#B44A3A',
   dCoral: '#D98B6F', dGreen: '#8FA87C', dRed: '#D07565',
+  dGold: '#C8A46A',
   dBorder: '#3A3529', dInk: '#EDE6D6',
 };
 

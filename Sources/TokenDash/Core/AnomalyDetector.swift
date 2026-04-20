@@ -27,8 +27,11 @@ final class AnomalyDetector {
 
     private func evaluate(_ snap: ProviderSnapshot) {
         guard let (metric, unit, humanFloor) = metricFor(providerID: snap.id) else { return }
-        let series = PersistentStore.shared.history(provider: snap.id, metric: metric, days: 8)
+        var series = PersistentStore.shared.history(provider: snap.id, metric: metric, days: 8)
         guard series.count == 8 else { return }
+        // OpenRouter stores cumulative spend; convert to daily deltas before
+        // running the anomaly check so a steadily-growing total doesn't alert.
+        series = maybeTransformToDeltas(series, providerID: snap.id)
         let baseline = Array(series.dropLast())  // 7 leading days
         let today = series.last ?? 0
         let nonZero = baseline.filter { $0 > 0 }
