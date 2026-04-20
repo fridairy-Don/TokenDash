@@ -2,19 +2,190 @@
 
 // Generate AppIcon.iconset/ PNGs and produce AppIcon.icns.
 //
-// Design: macOS Big Sur-style squircle, coral (#CC785C) background, cream
-// serif "T" monogram (a nod to tokens, and to the app name). Subtle inner
-// highlight for depth. Safe-area aware so it reads at 16×16.
+// Design: Big Sur squircle with a deep warm-charcoal radial gradient, three
+// concentric activity-style rings (coral / sand-gold / sage) at different fill
+// levels — a direct visual metaphor for multi-provider token monitoring.
+// A small cream "live" dot sits at the tip of the outer ring.
+//
+// Proportions chosen to stay legible at 32px+; below that a simplified
+// single-ring variant is drawn so the shape still reads at Finder icon size.
 
 import AppKit
 import CoreGraphics
 import Foundation
 
-func nsColor(_ hex: UInt32) -> NSColor {
+func nsColor(_ hex: UInt32, alpha: CGFloat = 1) -> NSColor {
     let r = CGFloat((hex >> 16) & 0xFF) / 255
     let g = CGFloat((hex >> 8) & 0xFF) / 255
     let b = CGFloat(hex & 0xFF) / 255
-    return NSColor(srgbRed: r, green: g, blue: b, alpha: 1)
+    return NSColor(srgbRed: r, green: g, blue: b, alpha: alpha)
+}
+
+// MARK: - Palette
+
+private let PALETTE_CORAL  = nsColor(0xCC785C)
+private let PALETTE_GOLD   = nsColor(0xD4A56E)
+private let PALETTE_SAGE   = nsColor(0x8FA87C)
+private let PALETTE_CREAM  = nsColor(0xFDF7E8)
+private let PALETTE_BG_HI  = nsColor(0x2B241E)   // warm charcoal (center of gradient)
+private let PALETTE_BG_LO  = nsColor(0x120E0A)   // near-black (edge of gradient)
+
+// MARK: - Drawing
+
+private struct Ring {
+    let radius: CGFloat
+    let progress: CGFloat      // 0..1
+    let color: NSColor
+}
+
+private func drawSquircleBackground(ctx: CGContext, rect: CGRect, colorSpace: CGColorSpace) {
+    let path = CGPath(
+        roundedRect: rect,
+        cornerWidth: rect.width * 0.225,
+        cornerHeight: rect.width * 0.225,
+        transform: nil
+    )
+    ctx.saveGState()
+    ctx.addPath(path)
+    ctx.clip()
+
+    if let grad = CGGradient(
+        colorsSpace: colorSpace,
+        colors: [PALETTE_BG_HI.cgColor, PALETTE_BG_LO.cgColor] as CFArray,
+        locations: [0.0, 1.0]
+    ) {
+        ctx.drawRadialGradient(
+            grad,
+            startCenter: CGPoint(x: rect.midX, y: rect.midY + rect.height * 0.08),
+            startRadius: 0,
+            endCenter: CGPoint(x: rect.midX, y: rect.midY),
+            endRadius: rect.width * 0.72,
+            options: []
+        )
+    }
+
+    // Very subtle inner top-highlight to give the glass a tiny lift.
+    if let topGlow = CGGradient(
+        colorsSpace: colorSpace,
+        colors: [
+            nsColor(0xE8B89A, alpha: 0.10).cgColor,
+            nsColor(0xE8B89A, alpha: 0).cgColor,
+        ] as CFArray,
+        locations: [0, 1]
+    ) {
+        ctx.drawLinearGradient(
+            topGlow,
+            start: CGPoint(x: rect.midX, y: rect.maxY),
+            end: CGPoint(x: rect.midX, y: rect.midY + rect.height * 0.1),
+            options: []
+        )
+    }
+    ctx.restoreGState()
+}
+
+private func strokeArc(
+    ctx: CGContext,
+    center: CGPoint,
+    radius: CGFloat,
+    startAngle: CGFloat,
+    endAngle: CGFloat,
+    clockwise: Bool,
+    color: CGColor,
+    width: CGFloat
+) {
+    ctx.setStrokeColor(color)
+    ctx.setLineWidth(width)
+    ctx.setLineCap(.round)
+    let path = CGMutablePath()
+    path.addArc(
+        center: center,
+        radius: radius,
+        startAngle: startAngle,
+        endAngle: endAngle,
+        clockwise: clockwise
+    )
+    ctx.addPath(path)
+    ctx.strokePath()
+}
+
+private func drawRings(ctx: CGContext, rect: CGRect, side: CGFloat) {
+    let center = CGPoint(x: rect.midX, y: rect.midY)
+    let maxR = rect.width * 0.355
+    let strokeW = rect.width * 0.085
+    let gap = rect.width * 0.035
+
+    let rings: [Ring] = [
+        Ring(radius: maxR,                                  progress: 0.78, color: PALETTE_CORAL),
+        Ring(radius: maxR - strokeW - gap,                  progress: 0.54, color: PALETTE_GOLD),
+        Ring(radius: maxR - 2 * (strokeW + gap),            progress: 0.38, color: PALETTE_SAGE),
+    ]
+
+    for ring in rings where ring.radius > strokeW * 0.5 {
+        // Track (subtle ghost ring).
+        strokeArc(
+            ctx: ctx, center: center, radius: ring.radius,
+            startAngle: 0, endAngle: 2 * .pi, clockwise: false,
+            color: NSColor.white.withAlphaComponent(0.055).cgColor,
+            width: strokeW
+        )
+
+        // Progress arc: starts at 12 o'clock, sweeps clockwise.
+        // macOS Y-up bitmap: 12 o'clock = +π/2. Clockwise sweep = decreasing angle.
+        let start: CGFloat = .pi / 2
+        let end = start - 2 * .pi * ring.progress
+        strokeArc(
+            ctx: ctx, center: center, radius: ring.radius,
+            startAngle: start, endAngle: end, clockwise: true,
+            color: ring.color.cgColor,
+            width: strokeW
+        )
+    }
+
+    // Live indicator dot at the tip of the outer ring.
+    if side >= 64, let outer = rings.first {
+        let tipAngle = .pi / 2 - 2 * .pi * outer.progress
+        let tip = CGPoint(
+            x: center.x + outer.radius * cos(tipAngle),
+            y: center.y + outer.radius * sin(tipAngle)
+        )
+        // Soft halo.
+        ctx.setFillColor(PALETTE_CREAM.withAlphaComponent(0.22).cgColor)
+        ctx.addArc(center: tip, radius: side * 0.045, startAngle: 0, endAngle: 2 * .pi, clockwise: false)
+        ctx.fillPath()
+        // Bright dot.
+        ctx.setFillColor(PALETTE_CREAM.cgColor)
+        ctx.addArc(center: tip, radius: side * 0.022, startAngle: 0, endAngle: 2 * .pi, clockwise: false)
+        ctx.fillPath()
+    }
+}
+
+/// Simplified variant for tiny sizes (16 / 32): one clean ring + centered dot.
+/// At Finder-icon-list sizes, three rings blur into mush — a single ring reads.
+private func drawSimplified(ctx: CGContext, rect: CGRect, side: CGFloat) {
+    let center = CGPoint(x: rect.midX, y: rect.midY)
+    let radius = rect.width * 0.3
+    let strokeW = max(rect.width * 0.13, 2)
+
+    strokeArc(
+        ctx: ctx, center: center, radius: radius,
+        startAngle: 0, endAngle: 2 * .pi, clockwise: false,
+        color: NSColor.white.withAlphaComponent(0.10).cgColor,
+        width: strokeW
+    )
+    let start: CGFloat = .pi / 2
+    let end = start - 2 * .pi * 0.72
+    strokeArc(
+        ctx: ctx, center: center, radius: radius,
+        startAngle: start, endAngle: end, clockwise: true,
+        color: PALETTE_CORAL.cgColor,
+        width: strokeW
+    )
+    // Small center dot.
+    if side >= 24 {
+        ctx.setFillColor(PALETTE_CREAM.cgColor)
+        ctx.addArc(center: center, radius: side * 0.06, startAngle: 0, endAngle: 2 * .pi, clockwise: false)
+        ctx.fillPath()
+    }
 }
 
 func generatePNG(side: Int) -> Data? {
@@ -26,82 +197,30 @@ func generatePNG(side: Int) -> Data? {
         bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
     ) else { return nil }
 
-    // macOS Big Sur icon geometry: content occupies ~82% of canvas, rest is padding.
+    // macOS Big Sur icon geometry: content occupies ~83% of canvas.
     let inset = s * 0.085
-    let squircleRect = CGRect(x: inset, y: inset, width: s - 2 * inset, height: s - 2 * inset)
-    let cornerRadius = squircleRect.width * 0.225   // squircle-ish curvature
+    let rect = CGRect(x: inset, y: inset, width: s - 2 * inset, height: s - 2 * inset)
 
-    // Coral fill
-    let squirclePath = CGPath(
-        roundedRect: squircleRect,
-        cornerWidth: cornerRadius, cornerHeight: cornerRadius,
-        transform: nil
-    )
-    ctx.addPath(squirclePath)
-    ctx.setFillColor(nsColor(0xCC785C).cgColor)
-    ctx.fillPath()
+    drawSquircleBackground(ctx: ctx, rect: rect, colorSpace: colorSpace)
 
-    // Subtle top highlight (a very light gradient for depth) — skip on 16px.
-    if side >= 32 {
-        ctx.saveGState()
-        ctx.addPath(squirclePath)
-        ctx.clip()
-        if let grad = CGGradient(
-            colorsSpace: colorSpace,
-            colors: [
-                nsColor(0xE8A78F).withAlphaComponent(0.35).cgColor,
-                nsColor(0xCC785C).withAlphaComponent(0.0).cgColor,
-            ] as CFArray,
-            locations: [0.0, 0.55]
-        ) {
-            ctx.drawLinearGradient(
-                grad,
-                start: CGPoint(x: squircleRect.midX, y: squircleRect.maxY),
-                end: CGPoint(x: squircleRect.midX, y: squircleRect.midY - squircleRect.height * 0.1),
-                options: []
-            )
-        }
-        ctx.restoreGState()
+    if side >= 48 {
+        drawRings(ctx: ctx, rect: rect, side: s)
+    } else {
+        drawSimplified(ctx: ctx, rect: rect, side: s)
     }
 
-    // Serif "T" monogram
-    let cream = nsColor(0xFDFBF5)
-    let fontSize = s * 0.56
-    let candidates = ["New York", "Source Serif 4", "Source Serif Pro", "Times New Roman"]
-    var font: NSFont? = nil
-    for name in candidates {
-        if let f = NSFont(name: name, size: fontSize) { font = f; break }
-    }
-    let desc = (font ?? NSFont.systemFont(ofSize: fontSize, weight: .semibold))
-        .fontDescriptor
-        .withSymbolicTraits([.bold])
-    let monoFont = NSFont(descriptor: desc, size: fontSize)
-        ?? NSFont.systemFont(ofSize: fontSize, weight: .heavy)
-
-    let attrs: [NSAttributedString.Key: Any] = [
-        .font: monoFont,
-        .foregroundColor: cream,
-        .kern: -fontSize * 0.02,
-    ]
-    let str = NSAttributedString(string: "T", attributes: attrs)
-    let strSize = str.size()
-    let line = CTLineCreateWithAttributedString(str)
-
-    // Center optically (serif "T" tends to look a hair too low at geometric center)
-    let tx = (s - strSize.width) / 2
-    let ty = (s - strSize.height) / 2 + s * 0.03
-
-    ctx.textPosition = CGPoint(x: tx, y: ty)
-    CTLineDraw(line, ctx)
-
-    // Small cream dot to echo the coral dot in the wordmark, bottom-right.
+    // Hairline edge for polish on larger sizes.
     if side >= 64 {
-        let dotR = s * 0.045
-        let dotX = squircleRect.maxX - dotR * 3.2
-        let dotY = squircleRect.minY + dotR * 3.2
-        ctx.setFillColor(cream.withAlphaComponent(0.85).cgColor)
-        ctx.addArc(center: CGPoint(x: dotX, y: dotY), radius: dotR, startAngle: 0, endAngle: .pi * 2, clockwise: false)
-        ctx.fillPath()
+        let path = CGPath(
+            roundedRect: rect,
+            cornerWidth: rect.width * 0.225,
+            cornerHeight: rect.width * 0.225,
+            transform: nil
+        )
+        ctx.addPath(path)
+        ctx.setStrokeColor(NSColor.white.withAlphaComponent(0.035).cgColor)
+        ctx.setLineWidth(max(1, s * 0.003))
+        ctx.strokePath()
     }
 
     guard let image = ctx.makeImage() else { return nil }
@@ -109,7 +228,8 @@ func generatePNG(side: Int) -> Data? {
     return rep.representation(using: .png, properties: [:])
 }
 
-// Required iconset manifest
+// MARK: - Output
+
 let targets: [(name: String, size: Int)] = [
     ("icon_16x16",    16),
     ("icon_16x16@2x", 32),

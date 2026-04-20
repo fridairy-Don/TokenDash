@@ -12,6 +12,22 @@ struct DashboardWebView: NSViewRepresentable {
         var isLoaded = false
         var pending: String? = nil
         weak var store: DataStore?
+        private var settingsObserver: NSObjectProtocol?
+
+        override init() {
+            super.init()
+            settingsObserver = NotificationCenter.default.addObserver(
+                forName: .tdOpenSettings, object: nil, queue: .main
+            ) { [weak self] _ in
+                self?.webView?.evaluateJavaScript("window.__setRoute && window.__setRoute('settings')", completionHandler: nil)
+            }
+        }
+
+        deinit {
+            if let obs = settingsObserver {
+                NotificationCenter.default.removeObserver(obs)
+            }
+        }
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
             isLoaded = true

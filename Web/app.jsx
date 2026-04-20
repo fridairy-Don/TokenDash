@@ -146,6 +146,28 @@ function QuotaBar({ pct, warn = false, dark = false }) {
   );
 }
 
+function Ring({ pct, size = 56, stroke = 5, t }) {
+  const r = (size - stroke) / 2;
+  const c = size / 2;
+  const circ = 2 * Math.PI * r;
+  const off = circ * (1 - Math.min(100, Math.max(0, pct)) / 100);
+  const dark = t.ink === VD2_DARK.ink;
+  const track = dark ? TD.dBorder : '#EDE7D8';
+  const fill = pct >= 85 ? (dark ? TD.dRed : TD.red) : (dark ? TD.dCoral : TD.coral);
+  return (
+    <svg width={size} height={size} style={{ flexShrink: 0, display: 'block' }}>
+      <circle cx={c} cy={c} r={r} fill="none" stroke={track} strokeWidth={stroke} />
+      <circle cx={c} cy={c} r={r} fill="none" stroke={fill} strokeWidth={stroke}
+        strokeDasharray={circ} strokeDashoffset={off} strokeLinecap="round"
+        transform={`rotate(-90 ${c} ${c})`}
+        style={{ transition: 'stroke-dashoffset 400ms ease' }} />
+      <text x={c} y={c} textAnchor="middle" dominantBaseline="central"
+        fontFamily={TD_FONTS.mono} fontSize={size * 0.26} fontWeight="500"
+        fill={t.ink} style={{ fontVariantNumeric: 'tabular-nums' }}>{pct}%</text>
+    </svg>
+  );
+}
+
 function ModelBar({ models, dark = false }) {
   if (!models || models.length === 0) return null;
   const colors = dark ? ['#D98B6F', '#C48872', '#9E6E5C', '#5E544A']
@@ -738,31 +760,89 @@ function InlineBar({ pct, t, width = 40 }) {
 }
 
 function VD2_Eleven({ t, d }) {
-  return (
-    <VD2_Compact t={t}>
-      <Monogram letter="E" t={t} tone="creator" />
-      <div style={{ minWidth: 0, flex: '0 0 auto' }}>
-        <div style={{ fontSize: 12, fontWeight: 600, color: t.ink, display: 'flex', alignItems: 'center', gap: 6, whiteSpace: 'nowrap' }}>
-          {d.name}<Pill t={t} tone="creator">{d.pill}</Pill>
+  const [hover, setHover] = React.useState(false);
+  const dark = t.ink === VD2_DARK.ink;
+  // Unconfigured / error → fall back to simple row
+  if (d.pct == null) {
+    return (
+      <VD2_Compact t={t}>
+        <Monogram letter="E" t={t} tone="creator" />
+        <div style={{ minWidth: 0, flex: 1 }}>
+          <div style={{ fontSize: 12, fontWeight: 600, color: t.muted, display: 'flex', alignItems: 'center', gap: 6, whiteSpace: 'nowrap' }}>
+            {d.name}<Pill t={t} tone="creator">{d.pill}</Pill>
+          </div>
+          <div style={{ fontFamily: TD_FONTS.serif, fontStyle: 'italic', fontSize: 11, color: t.dim, marginTop: 3 }}>
+            {d.note || 'API key not configured'}
+          </div>
         </div>
-        {d.resets && <div style={{ fontFamily: TD_FONTS.mono, fontSize: 10.5, color: t.dim, marginTop: 3, whiteSpace: 'nowrap' }}>{d.resets}</div>}
-        {d.note && !d.resets && <div style={{ fontFamily: TD_FONTS.serif, fontStyle: 'italic', fontSize: 11, color: t.dim, marginTop: 3 }}>{d.note}</div>}
+      </VD2_Compact>
+    );
+  }
+  return (
+    <div
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      style={{
+        background: hover ? t.surface : t.compactBg,
+        border: `1px solid ${hover ? t.border : (dark ? 'rgba(237,230,214,0.06)' : 'rgba(60,45,30,0.04)')}`,
+        borderRadius: 10, padding: '12px 14px', marginBottom: 8,
+        boxShadow: hover ? '0 4px 10px rgba(60,45,30,0.07)' : 'none',
+        transform: hover ? 'translateY(-1px)' : 'none',
+        transition: 'all 160ms ease',
+      }}>
+      {/* Header row */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 10 }}>
+        <span style={{ fontSize: 12, fontWeight: 600, color: t.ink, whiteSpace: 'nowrap' }}>{d.name}</span>
+        <Pill t={t} tone={d.pill}>{d.pill}</Pill>
+        <span style={{ flex: 1 }} />
+        {d.resets && <span style={{
+          fontFamily: TD_FONTS.mono, fontSize: 10, color: t.dim, whiteSpace: 'nowrap',
+        }}>{d.resets}</span>}
       </div>
-      <div style={{ flex: 1 }} />
-      <div style={{ textAlign: 'right', minWidth: 0 }}>
-        {d.pct != null && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6, justifyContent: 'flex-end' }}>
-            <InlineBar pct={d.pct} t={t} />
-            <span style={{ fontFamily: TD_FONTS.mono, fontSize: 13, color: t.ink, fontVariantNumeric: 'tabular-nums', fontWeight: 500 }}>{d.pct}%</span>
-          </div>
-        )}
-        {d.usedLabel && (
-          <div style={{ fontFamily: TD_FONTS.mono, fontSize: 10, color: t.dim, marginTop: 3, whiteSpace: 'nowrap' }}>
-            {d.usedLabel} <span style={{ opacity: 0.6 }}>/ {d.totalLabel}</span>
-          </div>
-        )}
+      {/* Body: ring + text */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+        <Ring pct={Number(d.pct)} t={t} />
+        <div style={{ minWidth: 0, flex: 1 }}>
+          {d.usedLabel && (
+            <div style={{
+              fontFamily: TD_FONTS.mono, fontSize: 15, color: t.ink,
+              fontVariantNumeric: 'tabular-nums', letterSpacing: -0.3, lineHeight: 1.1,
+            }}>{d.usedLabel} <span style={{ color: t.dim }}>/ {d.totalLabel}</span></div>
+          )}
+          <div style={{
+            fontFamily: TD_FONTS.serif, fontStyle: 'italic',
+            fontSize: 11, color: t.dim, marginTop: 4,
+          }}>characters this cycle</div>
+          {d.reqsToday != null && (
+            <div style={{
+              fontFamily: TD_FONTS.mono, fontSize: 10, color: t.muted, marginTop: 5,
+              letterSpacing: 0.2, display: 'flex', alignItems: 'baseline', gap: 6, flexWrap: 'wrap',
+            }}>
+              <span>
+                <span style={{ color: t.ink, fontWeight: 500 }}>{d.reqsToday}</span>
+                <span style={{ opacity: 0.75 }}> reqs today</span>
+              </span>
+              {d.charsToday && Number(d.charsToday.replace(/,/g, '')) > 0 && (
+                <>
+                  <span style={{ opacity: 0.4 }}>·</span>
+                  <span><span style={{ color: t.ink, fontWeight: 500 }}>{d.charsToday}</span><span style={{ opacity: 0.75 }}> chars</span></span>
+                </>
+              )}
+              {d.reqTrend && (
+                <>
+                  <span style={{ opacity: 0.4 }}>·</span>
+                  <span style={{
+                    color: d.reqTrend.indexOf('↗') >= 0
+                      ? (t.ink === VD2_DARK.ink ? TD.dGreen : '#5B7A4C')
+                      : (d.reqTrend.indexOf('↘') >= 0 ? t.dim : t.dim),
+                  }}>{d.reqTrend}</span>
+                </>
+              )}
+            </div>
+          )}
+        </div>
       </div>
-    </VD2_Compact>
+    </div>
   );
 }
 
@@ -836,6 +916,79 @@ function VD2_CompactRouter({ t, p }) {
   }
 }
 
+// ─── API key row ─────────────────────────────────────────────────────────────
+
+function KeyRow({ t, label, account, hasKey }) {
+  const [val, setVal] = React.useState('');
+  const [saved, setSaved] = React.useState(false);
+
+  const save = () => {
+    const trimmed = val.trim();
+    if (!trimmed) return;
+    postSwift('set-key:' + account + ':' + trimmed);
+    setVal('');
+    setSaved(true);
+    setTimeout(() => setSaved(false), 1800);
+  };
+
+  const clear = () => {
+    postSwift('clear-key:' + account);
+    setVal('');
+  };
+
+  return (
+    <div style={{ marginTop: 10 }}>
+      <div style={{
+        display: 'flex', alignItems: 'center', gap: 8, marginBottom: 5,
+      }}>
+        <span style={{ fontFamily: TD_FONTS.sans, fontSize: 12, color: t.ink, flex: 1 }}>{label}</span>
+        {hasKey && (
+          <span style={{
+            fontFamily: TD_FONTS.mono, fontSize: 9.5,
+            color: t.green || '#6B8E5A',
+            background: t.ink === VD2_DARK.ink ? 'rgba(143,168,124,0.15)' : '#E4EBDB',
+            padding: '1px 7px', borderRadius: 8,
+          }}>stored</span>
+        )}
+      </div>
+      <div style={{ display: 'flex', gap: 6 }}>
+        <input
+          type="password"
+          value={val}
+          onChange={e => setVal(e.target.value)}
+          onKeyDown={e => e.key === 'Enter' && save()}
+          placeholder={hasKey ? '••••••  (paste to replace)' : 'Paste API key…'}
+          style={{
+            flex: 1, fontFamily: TD_FONTS.mono, fontSize: 11,
+            padding: '7px 9px', borderRadius: 7,
+            border: `1px solid ${t.border}`,
+            background: t.ink === VD2_DARK.ink ? t.surfaceAlt : t.compactBg,
+            color: t.ink, outline: 'none',
+          }}
+        />
+        {val.trim() ? (
+          <button onClick={save} style={{
+            padding: '0 12px', borderRadius: 7,
+            border: 'none', cursor: 'pointer',
+            background: saved ? (t.ink === VD2_DARK.ink ? 'rgba(143,168,124,0.25)' : '#E4EBDB')
+                               : t.coral,
+            color: saved ? (t.green || '#6B8E5A') : '#fff',
+            fontFamily: TD_FONTS.sans, fontSize: 12, fontWeight: 600,
+            transition: 'background 200ms',
+          }}>{saved ? '✓' : 'Save'}</button>
+        ) : hasKey ? (
+          <button onClick={clear} style={{
+            padding: '0 10px', borderRadius: 7,
+            border: `1px solid ${t.border}`, cursor: 'pointer',
+            background: 'transparent', color: t.muted,
+            fontFamily: TD_FONTS.sans, fontSize: 12,
+          }}>Clear</button>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
 // ─── Settings overlay ────────────────────────────────────────────────────────
 
 function VD2_Settings({ t, theme, setTheme, onResetOrder, orderDirty }) {
@@ -845,9 +998,20 @@ function VD2_Settings({ t, theme, setTheme, onResetOrder, orderDirty }) {
     { id: 'dark',  label: 'Dark'  },
     { id: 'auto',  label: 'Auto'  },
   ];
+  const ks = (window.TD_DATA && window.TD_DATA.keyStatus) || {};
 
   return (
     <div style={{ padding: '4px 2px 0' }}>
+      <SectionCard t={t}>
+        <SectionLabel t={t}>API Keys</SectionLabel>
+        <div style={{
+          marginTop: 6, fontFamily: TD_FONTS.sans, fontSize: 11, color: t.dim, lineHeight: 1.5,
+        }}>Keys are stored in your macOS Keychain. Nothing is sent anywhere else.</div>
+        <KeyRow t={t} label="ElevenLabs" account="elevenlabs" hasKey={!!ks.elevenlabs} />
+        <KeyRow t={t} label="OpenRouter" account="openrouter" hasKey={!!ks.openrouter} />
+        <KeyRow t={t} label="Groq" account="groq" hasKey={!!ks.groq} />
+      </SectionCard>
+
       <SectionCard t={t}>
         <SectionLabel t={t}>Appearance</SectionLabel>
         <div style={{
@@ -1100,6 +1264,7 @@ function VD2_App() {
 
   const [, force] = React.useReducer(x => x + 1, 0);
   React.useEffect(() => { window.__render = force; }, []);
+  React.useEffect(() => { window.__setRoute = setRoute; return () => { window.__setRoute = null; }; }, []);
 
   const t = dark ? VD2_DARK : VD2_LIGHT;
   const providers = (window.TD_DATA && window.TD_DATA.providers) || MOCK_DATA.providers;

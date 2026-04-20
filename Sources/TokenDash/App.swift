@@ -40,12 +40,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             )
             image?.isTemplate = true
             button.image = image
-            button.action = #selector(togglePopover(_:))
+            button.action = #selector(handleClick(_:))
             button.target = self
+            // Receive both left- and right-click events so we can route them.
+            button.sendAction(on: [.leftMouseUp, .rightMouseUp])
         }
     }
 
-    @objc private func togglePopover(_ sender: Any?) {
+    @objc private func handleClick(_ sender: Any?) {
+        let event = NSApp.currentEvent
+        if event?.type == .rightMouseUp {
+            showContextMenu()
+        } else {
+            togglePopover(sender)
+        }
+    }
+
+    private func togglePopover(_ sender: Any?) {
         guard let button = statusItem.button else { return }
         if popover.isShown {
             popover.performClose(sender)
@@ -55,4 +66,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             popover.contentViewController?.view.window?.makeKey()
         }
     }
+
+    private func showContextMenu() {
+        let menu = NSMenu()
+        let settings = NSMenuItem(title: "Settings", action: #selector(openSettingsFromMenu), keyEquivalent: ",")
+        settings.target = self
+        menu.addItem(settings)
+        menu.addItem(.separator())
+        let quit = NSMenuItem(title: "Quit TokenDash", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        menu.addItem(quit)
+
+        // Temporarily attach the menu to the status item and perform a click so
+        // AppKit positions it correctly under the menu-bar icon. We reset menu
+        // right after so normal left-click keeps toggling the popover.
+        statusItem.menu = menu
+        statusItem.button?.performClick(nil)
+        statusItem.menu = nil
+    }
+
+    @objc private func openSettingsFromMenu() {
+        guard let button = statusItem.button else { return }
+        if !popover.isShown {
+            Task { await store.refreshAll() }
+            popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+            popover.contentViewController?.view.window?.makeKey()
+        }
+        NotificationCenter.default.post(name: .tdOpenSettings, object: nil)
+    }
+}
+
+extension Notification.Name {
+    static let tdOpenSettings = Notification.Name("TDOpenSettings")
 }
