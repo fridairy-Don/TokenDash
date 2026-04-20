@@ -1,0 +1,5 @@
+.DS_Store
+.build/
+TokenDash.app/
+*.o
+*.d

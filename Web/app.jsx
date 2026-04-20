@@ -1,0 +1,1180 @@
+// TokenDash — adapted from Claude Design Variant D2
+// Modifications vs the pristine Claude Design source:
+//   • Data is injected dynamically via window.TD_DATA (Swift bridge)
+//   • Model mix legend is adaptive (1–3 models = single row; 4 = 2×2 grid)
+//   • 7-day bar chart in the drawer shows per-bar tooltips on hover
+//   • Hero cards have a subtle hover-lift (parity with compact cards)
+//   • Both Claude Code AND Codex cards are expandable (JSX only had Claude)
+//   • Palette nudged a touch lighter to match claude.ai product UI more closely
+//   • React 18 createRoot instead of ReactDOM.render
+
+// ─── Tokens ──────────────────────────────────────────────────────────────────
+
+const TD_FONTS = {
+  serif: '"Source Serif 4", "Source Serif Pro", "New York", ui-serif, Georgia, serif',
+  sans: '"Inter", -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif',
+  mono: '"JetBrains Mono", "SF Mono", ui-monospace, Menlo, monospace',
+};
+
+const TD = {
+  coral: '#CC785C', green: '#6B8E5A', red: '#B44A3A',
+  dCoral: '#D98B6F', dGreen: '#8FA87C', dRed: '#D07565',
+  dBorder: '#3A3529', dInk: '#EDE6D6',
+};
+
+const VD2_LIGHT = {
+  canvas: '#FCFBF7',
+  surface: '#FFFFFF',
+  surfaceAlt: '#F6F4ED',
+  compactBg: '#F4F2EA',
+  border: '#EBE6D8',
+  borderSoft: '#F1ECDE',
+  hair: 'rgba(26,25,21,0.06)',
+  ink: '#1A1915',
+  muted: '#6B6860',
+  dim: '#9B978C',
+  coral: '#CC785C',
+  green: '#6B8E5A',
+  red: '#B44A3A',
+};
+
+const VD2_DARK = {
+  canvas: '#1C1A16',
+  surface: '#24221C',
+  surfaceAlt: '#2B2820',
+  compactBg: 'rgba(237,230,214,0.03)',
+  border: '#3A3529',
+  borderSoft: '#302C24',
+  hair: 'rgba(237,230,214,0.08)',
+  ink: '#EDE6D6',
+  muted: '#A39E90',
+  dim: '#7A7668',
+  coral: '#D98B6F',
+  green: '#8FA87C',
+  red: '#D07565',
+};
+
+const VD2_W = 420;
+
+// ─── Mock fallback ───────────────────────────────────────────────────────────
+
+const MOCK_DATA = {
+  claude: {
+    name: 'Claude Code', pill: 'Max', today: '11.80M',
+    spark: [6.2, 7.8, 5.4, 9.1, 8.3, 10.6, 11.8],
+    trend: '↗ 28% vs last wk',
+    models: [
+      { name: 'Opus 4.7', pct: 63 }, { name: 'Sonnet 4.6', pct: 20 },
+      { name: 'Opus 4.6', pct: 14 }, { name: 'Haiku 4.5', pct: 3 },
+    ],
+    quotas: [
+      { label: '5h window', pct: 52, resets: 'resets in 1h 48m' },
+      { label: 'Weekly',    pct: 71, resets: 'resets in 4d 12h' },
+    ],
+    weekTotal: '58.3M', monthTotal: '214.6M', sessions: '47',
+    dayBuckets: [6.2, 7.8, 5.4, 9.1, 8.3, 10.6, 11.8],
+    dayLabels: ['M','T','W','T','F','S','S'],
+    dayUnits: 'M', weeklyAvg: '8.5M',
+    topSessions: [
+      { time: '2:14 PM', tokens: '2.4M', duration: '38m' },
+      { time: '11:02 AM', tokens: '1.9M', duration: '24m' },
+      { time: '9:48 AM', tokens: '1.1M', duration: '14m' },
+    ],
+  },
+  codex: {
+    name: 'Codex CLI', pill: 'Plus', model: 'GPT-5.4', today: '2.14M',
+    quotas: [
+      { label: '5h window', pct: 24, resets: 'resets in 2h 14m' },
+      { label: 'Weekly',    pct: 96, resets: 'resets in 2d 3h', warn: true },
+    ],
+    weekTotal: '12.4M', monthTotal: '46.1M', sessions: '—',
+    dayBuckets: [1.1, 1.4, 0.9, 2.0, 1.6, 2.3, 2.14],
+    dayLabels: ['M','T','W','T','F','S','S'],
+    dayUnits: 'M', weeklyAvg: '1.6M',
+    topSessions: [],
+  },
+  providers: [
+    { id: 'elevenlabs', kind: 'eleven', name: 'ElevenLabs', pill: 'Creator',
+      pct: 48, resets: 'resets Apr 27', usedLabel: '48,213', totalLabel: '100K' },
+    { id: 'openrouter', kind: 'router', name: 'OpenRouter', pill: 'Pay-as-you-go',
+      credits: '$12.47', spendLabel: '$1.82 · 24h' },
+    { id: 'groq', kind: 'groq', name: 'Groq', pill: 'Free tier',
+      note: 'no usage API — key stored' },
+  ],
+  footer: { providerCount: 5, nextRefresh: '18s', live: 'live' },
+  header: { subtitle: 'Updated 12s ago · 2 active · 3 idle' },
+};
+
+// ─── Primitives ──────────────────────────────────────────────────────────────
+
+function Sparkline({ data, width = 84, height = 26, stroke = '#CC785C', fill, dots = false }) {
+  if (!data || data.length < 2) return null;
+  const max = Math.max(...data), min = Math.min(...data);
+  const range = max - min || 1;
+  const step = width / (data.length - 1);
+  const pts = data.map((v, i) => [i * step, height - ((v - min) / range) * (height - 2) - 1]);
+  const d = pts.map((p, i) => (i === 0 ? 'M' : 'L') + p[0].toFixed(1) + ' ' + p[1].toFixed(1)).join(' ');
+  const area = `${d} L ${width} ${height} L 0 ${height} Z`;
+  return (
+    <svg width={width} height={height} style={{ display: 'block', overflow: 'visible' }}>
+      {fill && <path d={area} fill={fill} />}
+      <path d={d} fill="none" stroke={stroke} strokeWidth="1.25" strokeLinecap="round" strokeLinejoin="round" />
+      {dots && pts.map((p, i) => (
+        <circle key={i} cx={p[0]} cy={p[1]} r={i === pts.length - 1 ? 1.8 : 0.8} fill={stroke} />
+      ))}
+    </svg>
+  );
+}
+
+function QuotaBar({ pct, warn = false, dark = false }) {
+  const track = dark ? TD.dBorder : '#EDE7D8';
+  const isHot = warn || pct >= 85;
+  const fillColor = isHot ? (dark ? TD.dRed : TD.red)
+                          : (dark ? TD.dCoral : TD.coral);
+  return (
+    <div style={{
+      position: 'relative', width: '100%', height: 6, borderRadius: 3,
+      background: track, overflow: 'hidden',
+    }}>
+      <div style={{
+        position: 'absolute', top: 0, left: 0, bottom: 0,
+        width: Math.min(100, pct) + '%',
+        background: fillColor, borderRadius: 3,
+        animation: isHot ? 'td-pulse 2.2s ease-in-out infinite' : undefined,
+      }} />
+    </div>
+  );
+}
+
+function ModelBar({ models, dark = false }) {
+  if (!models || models.length === 0) return null;
+  const colors = dark ? ['#D98B6F', '#C48872', '#9E6E5C', '#5E544A']
+                      : [TD.coral, '#D89780', '#B8897C', '#A59684'];
+  const total = models.reduce((a, m) => a + m.pct, 0) || 100;
+  return (
+    <div style={{
+      display: 'flex', width: '100%', height: 7, borderRadius: 3.5, overflow: 'hidden',
+      background: dark ? TD.dBorder : '#EDE7D8',
+    }}>
+      {models.map((m, i) => (
+        <div key={i} style={{ width: (m.pct / total * 100) + '%', background: colors[i % colors.length] }} />
+      ))}
+    </div>
+  );
+}
+
+// ─── Shell / Header / Footer ─────────────────────────────────────────────────
+
+function VD2_Shell({ children, dark = false, route, onSettings, onBack }) {
+  const t = dark ? VD2_DARK : VD2_LIGHT;
+  return (
+    <div style={{
+      width: VD2_W, height: '100vh', maxHeight: '100vh', background: t.canvas,
+      fontFamily: TD_FONTS.sans, color: t.ink, overflow: 'hidden',
+      position: 'relative', display: 'flex', flexDirection: 'column',
+    }}>
+      <VD2_Header t={t} dark={dark} route={route} onSettings={onSettings} onBack={onBack} />
+      <div style={{
+        flex: 1, overflowY: 'auto', padding: '12px 14px',
+        display: 'flex', flexDirection: 'column', gap: 0,
+      }}>{children}</div>
+      <VD2_Footer t={t} />
+    </div>
+  );
+}
+
+function postSwift(msg) {
+  if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.td) {
+    window.webkit.messageHandlers.td.postMessage(msg);
+  }
+}
+
+function VD2_Header({ t, dark, route, onSettings, onBack }) {
+  const h = (window.TD_DATA && window.TD_DATA.header) || MOCK_DATA.header;
+  const inSettings = route === 'settings';
+  return (
+    <div style={{
+      padding: '14px 16px 12px', borderBottom: `1px solid ${t.border}`,
+      display: 'flex', alignItems: 'center', gap: 10,
+      background: dark ? t.surface : '#FFFFFF',
+    }}>
+      {inSettings ? (
+        <IconButton t={t} title="Back" onClick={onBack}>
+          <svg width="13" height="13" viewBox="0 0 13 13" fill="none">
+            <path d="M8 3L3.5 6.5 8 10" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/>
+          </svg>
+        </IconButton>
+      ) : (
+        <span style={{
+          width: 7, height: 7, borderRadius: 10, background: t.coral,
+          boxShadow: `0 0 0 3px ${t.coral}22`, flexShrink: 0, marginLeft: 2,
+        }} />
+      )}
+      <div style={{ flex: 1, minWidth: 0, marginLeft: inSettings ? 0 : 3 }}>
+        <div style={{
+          fontFamily: TD_FONTS.serif, fontSize: 20, fontWeight: 500,
+          letterSpacing: -0.3, color: t.ink, lineHeight: 1,
+        }}>{inSettings ? 'Settings' : 'TokenDash'}</div>
+        {!inSettings && (
+          <div style={{ fontSize: 10.5, color: t.dim, marginTop: 3, whiteSpace: 'nowrap' }}>
+            {h.subtitle}
+          </div>
+        )}
+        {inSettings && (
+          <div style={{ fontSize: 10.5, color: t.dim, marginTop: 3 }}>
+            Adjust plan & limits
+          </div>
+        )}
+      </div>
+      {!inSettings && (
+        <>
+          <IconButton t={t} title="Refresh" onClick={() => postSwift('refresh')}>
+            <svg width="13" height="13" viewBox="0 0 13 13" fill="none">
+              <path d="M11 6.5A4.5 4.5 0 1 1 10 3.5M11 1.5v2.5h-2.5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/>
+            </svg>
+          </IconButton>
+          <IconButton t={t} title="Settings" onClick={onSettings}>
+            <svg width="13" height="13" viewBox="0 0 13 13" fill="none">
+              <circle cx="6.5" cy="6.5" r="1.6" stroke="currentColor" strokeWidth="1.2"/>
+              <path d="M6.5 1.2v1.6m0 7.4v1.6M1.2 6.5h1.6m7.4 0h1.6M2.8 2.8l1.1 1.1m5.2 5.2l1.1 1.1M2.8 10.2l1.1-1.1m5.2-5.2l1.1-1.1" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round"/>
+            </svg>
+          </IconButton>
+          <IconButton t={t} title="Quit" onClick={() => postSwift('quit')}>
+            <svg width="13" height="13" viewBox="0 0 13 13" fill="none">
+              <path d="M6.5 1.5v5M10 3a4.5 4.5 0 1 1-7 0" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round"/>
+            </svg>
+          </IconButton>
+        </>
+      )}
+    </div>
+  );
+}
+
+function IconButton({ children, onClick, t, title }) {
+  const [hover, setHover] = React.useState(false);
+  return (
+    <button
+      title={title}
+      onClick={onClick}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      style={{
+        width: 26, height: 26, border: 'none',
+        background: hover ? t.surfaceAlt : 'transparent',
+        borderRadius: 6, cursor: 'pointer', color: hover ? t.ink : t.muted,
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        transition: 'background 120ms ease, color 120ms ease',
+      }}>{children}</button>
+  );
+}
+
+function VD2_Footer({ t }) {
+  const f = (window.TD_DATA && window.TD_DATA.footer) || MOCK_DATA.footer;
+  return (
+    <div style={{
+      padding: '10px 16px', borderTop: `1px solid ${t.border}`,
+      display: 'flex', alignItems: 'center', gap: 8,
+      fontSize: 10.5, color: t.dim,
+    }}>
+      <span style={{
+        width: 5, height: 5, borderRadius: 10, background: t.coral,
+        animation: 'td-blink 1.8s ease-in-out infinite',
+      }} />
+      <span style={{ fontFamily: TD_FONTS.serif, fontStyle: 'italic', whiteSpace: 'nowrap' }}>
+        {f.providerCount} providers
+      </span>
+      <span style={{ opacity: 0.4 }}>·</span>
+      <span style={{ fontFamily: TD_FONTS.mono, whiteSpace: 'nowrap' }}>
+        next refresh {f.nextRefresh}
+      </span>
+      <span style={{ flex: 1 }} />
+      <span style={{ fontFamily: TD_FONTS.mono, fontSize: 9.5 }}>{f.live}</span>
+    </div>
+  );
+}
+
+// ─── Pill + Monogram ─────────────────────────────────────────────────────────
+
+const PILL_TONES_LIGHT = {
+  max:     { bg: '#F5E3DB', fg: '#CC785C' },
+  plus:    { bg: '#E4EBDB', fg: '#5B7A4C' },
+  creator: { bg: '#E7DFF1', fg: '#6A5A8B' },
+  payg:    { bg: '#F0E5D8', fg: '#8B6A45' },
+  free:    { bg: '#E8E6DE', fg: '#8E8A80' },
+};
+const PILL_TONES_DARK = {
+  max:     { bg: 'rgba(217,139,111,0.2)', fg: '#D98B6F' },
+  plus:    { bg: 'rgba(143,168,124,0.2)', fg: '#8FA87C' },
+  creator: { bg: 'rgba(170,140,200,0.2)', fg: '#B79ED6' },
+  payg:    { bg: 'rgba(200,160,110,0.2)', fg: '#C9A878' },
+  free:    { bg: 'rgba(237,230,214,0.08)', fg: '#7A7668' },
+};
+function pillTone(name, dark) {
+  const key = (name || 'free').toLowerCase().replace(/[^a-z]/g, '');
+  const map = { max: 'max', plus: 'plus', creator: 'creator', payasyougo: 'payg', freetier: 'free', free: 'free' };
+  const tone = map[key] || 'free';
+  return (dark ? PILL_TONES_DARK : PILL_TONES_LIGHT)[tone];
+}
+
+function Pill({ children, t, tone }) {
+  const dark = t.ink === VD2_DARK.ink;
+  const s = pillTone(tone, dark);
+  return (
+    <span style={{
+      display: 'inline-flex', alignItems: 'center',
+      padding: '1px 7px', borderRadius: 10, flexShrink: 0,
+      fontSize: 9.5, fontWeight: 500, letterSpacing: 0.3,
+      background: s.bg, color: s.fg, whiteSpace: 'nowrap',
+    }}>{children}</span>
+  );
+}
+
+function Monogram({ letter, t, tone }) {
+  const dark = t.ink === VD2_DARK.ink;
+  const s = pillTone(tone, dark);
+  return (
+    <div style={{
+      width: 28, height: 28, borderRadius: 14,
+      background: s.bg, color: s.fg, flexShrink: 0,
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
+      fontFamily: TD_FONTS.serif, fontSize: 14, fontWeight: 500,
+    }}>{letter}</div>
+  );
+}
+
+// ─── Quota row ───────────────────────────────────────────────────────────────
+
+function VD2_QuotaRow({ q, t }) {
+  const pctColor = (q.warn || q.pct >= 85) ? t.red : t.ink;
+  return (
+    <div style={{ marginBottom: 8 }}>
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 4 }}>
+        <span style={{ fontFamily: TD_FONTS.serif, fontStyle: 'italic', fontSize: 11, color: t.ink }}>{q.label}</span>
+        <span style={{ fontFamily: TD_FONTS.mono, fontSize: 10, color: t.dim, whiteSpace: 'nowrap' }}>{q.resets}</span>
+        <span style={{ flex: 1 }} />
+        <span style={{ fontFamily: TD_FONTS.mono, fontSize: 11.5, fontWeight: 500, color: pctColor, fontVariantNumeric: 'tabular-nums' }}>{Math.round(q.pct)}%</span>
+      </div>
+      <QuotaBar pct={q.pct} warn={q.warn} dark={t.ink === VD2_DARK.ink} />
+    </div>
+  );
+}
+
+// ─── Hero card shell (now with hover lift) ───────────────────────────────────
+
+function VD2_Hero({ children, t, warn, expanded, onToggle }) {
+  const [hover, setHover] = React.useState(false);
+  return (
+    <div
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      style={{
+        background: t.surface,
+        border: `1px solid ${warn ? (t.ink === VD2_DARK.ink ? '#8B4A3C' : '#E5BFB3') : (hover ? t.border : t.border)}`,
+        borderRadius: 14, padding: '14px 16px', marginBottom: 12,
+        boxShadow: t.ink === VD2_DARK.ink
+          ? (hover ? '0 6px 18px rgba(0,0,0,0.4)' : 'none')
+          : (hover ? '0 6px 16px rgba(60,45,30,0.08), 0 1px 0 rgba(60,45,30,0.03)' : '0 1px 0 rgba(60,45,30,0.02)'),
+        transform: hover ? 'translateY(-1px)' : 'none',
+        transition: 'box-shadow 160ms ease, transform 160ms ease',
+        position: 'relative', cursor: onToggle ? 'pointer' : 'default',
+      }}
+      onClick={onToggle}>
+      {children}
+      {onToggle && (
+        <div style={{
+          position: 'absolute', top: 16, right: 14,
+          color: t.dim, opacity: hover || expanded ? 0.9 : 0.35,
+          transition: 'opacity 160ms ease',
+          pointerEvents: 'none',
+        }}>
+          <svg width="10" height="10" viewBox="0 0 12 12" fill="none"
+               style={{ transform: expanded ? 'rotate(180deg)' : 'none', transition: 'transform 200ms ease' }}>
+            <path d="M2.5 4.5l3.5 3.5 3.5-3.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/>
+          </svg>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Claude hero ─────────────────────────────────────────────────────────────
+
+function VD2_ClaudeHero({ t, expanded, onToggle }) {
+  const d = (window.TD_DATA && window.TD_DATA.claude) || MOCK_DATA.claude;
+  return (
+    <VD2_Hero t={t} expanded={expanded} onToggle={onToggle}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10, paddingRight: 18 }}>
+        <span style={{ fontSize: 13, fontWeight: 600, color: t.ink, whiteSpace: 'nowrap' }}>{d.name}</span>
+        <Pill t={t} tone={d.pill}>{d.pill}</Pill>
+        <span style={{ flex: 1 }} />
+        <span style={{ fontFamily: TD_FONTS.mono, fontSize: 9, color: t.dim, whiteSpace: 'nowrap' }}>live</span>
+      </div>
+
+      {/* Big today headline */}
+      <div style={{ marginBottom: 14 }}>
+        <div style={{
+          fontFamily: TD_FONTS.mono, fontSize: 40, fontWeight: 400,
+          letterSpacing: -1.4, color: t.ink, lineHeight: 0.95,
+          fontVariantNumeric: 'tabular-nums',
+        }}>{d.today}</div>
+        <div style={{
+          fontFamily: TD_FONTS.serif, fontStyle: 'italic',
+          fontSize: 11, color: t.dim, marginTop: 5,
+          display: 'flex', alignItems: 'baseline', gap: 6, flexWrap: 'wrap',
+        }}>
+          <span>tokens today</span>
+          {d.trend && (
+            <>
+              <span style={{ opacity: 0.5 }}>·</span>
+              <span style={{
+                fontFamily: TD_FONTS.mono, fontStyle: 'normal', fontSize: 10,
+                color: t.ink === VD2_DARK.ink ? TD.dGreen : '#5B7A4C',
+              }}>{d.trend}</span>
+            </>
+          )}
+        </div>
+      </div>
+
+      {/* 7-day + Month stats */}
+      <div style={{ display: 'flex', gap: 14, marginBottom: 14 }}>
+        <HairStat label="7-day" value={d.weekTotal || '—'} t={t} />
+        <HairStat label="Month" value={d.monthTotal || '—'} t={t} />
+        <HairStat label="Avg / day" value={d.weeklyAvg || '—'} t={t} />
+      </div>
+
+      {/* Per-day bar chart — primary now */}
+      {d.dayBuckets && d.dayBuckets.length > 0 && (
+        <div style={{ marginBottom: 14 }}>
+          <WeekBarChart
+            data={d.dayBuckets}
+            labels={d.dayLabels || []}
+            units={d.dayUnits || ''}
+            avg={''}
+            t={t} />
+        </div>
+      )}
+
+      {/* Models */}
+      {d.models && d.models.length > 0 && (
+        <div>
+          <div style={{
+            display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 6,
+          }}>
+            <span style={{
+              fontFamily: TD_FONTS.serif, fontStyle: 'italic',
+              fontSize: 10.5, color: t.dim, letterSpacing: 0.2,
+            }}>Models</span>
+            <span style={{ flex: 1, height: 1, background: t.hair }} />
+          </div>
+          <ModelBar models={d.models} dark={t.ink === VD2_DARK.ink} />
+          <ModelLegend models={d.models} t={t} />
+        </div>
+      )}
+
+      {expanded && <VD2_ClaudeDrawer t={t} d={d} />}
+    </VD2_Hero>
+  );
+}
+
+// Claude drawer — only "几点到几点" (top sessions) lives here now,
+// since 7-day / Month / bar chart got promoted to the primary view.
+function VD2_ClaudeDrawer({ t, d }) {
+  const hasSessions = d.topSessions && d.topSessions.length > 0;
+  return (
+    <div
+      onClick={(e) => e.stopPropagation()}
+      style={{ marginTop: 14, paddingTop: 14, borderTop: `1px solid ${t.border}` }}>
+      <div style={{
+        marginBottom: 8,
+        fontFamily: TD_FONTS.serif, fontStyle: 'italic', fontSize: 12, color: t.ink,
+      }}>Top sessions today</div>
+      {hasSessions ? d.topSessions.map((s, i) => (
+        <div key={i} style={{
+          display: 'grid', gridTemplateColumns: '70px 1fr 50px',
+          fontSize: 11, padding: '5px 0',
+          color: t.muted, fontFamily: TD_FONTS.mono,
+          borderBottom: i < d.topSessions.length - 1 ? `1px solid ${t.hair}` : 'none',
+          fontVariantNumeric: 'tabular-nums',
+        }}>
+          <span style={{ whiteSpace: 'nowrap' }}>{s.time}</span>
+          <span style={{ color: t.ink, fontWeight: 500, textAlign: 'right' }}>{s.tokens}</span>
+          <span style={{ textAlign: 'right' }}>{s.duration}</span>
+        </div>
+      )) : (
+        <div style={{
+          fontFamily: TD_FONTS.serif, fontStyle: 'italic',
+          fontSize: 11, color: t.dim,
+        }}>No sessions yet today.</div>
+      )}
+    </div>
+  );
+}
+
+function ModelLegend({ models, t }) {
+  const dark = t.ink === VD2_DARK.ink;
+  const colors = dark ? ['#D98B6F', '#C48872', '#9E6E5C', '#5E544A']
+                      : ['#CC785C', '#D89780', '#B8897C', '#A59684'];
+  const cell = (m, i) => (
+    <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0, flex: 1 }}>
+      <span style={{ width: 7, height: 7, borderRadius: 2, background: colors[i % 4], flexShrink: 0 }} />
+      <span style={{ color: t.muted, flex: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', fontSize: 11 }}>{m.name}</span>
+      <span style={{ fontFamily: TD_FONTS.mono, color: t.ink, fontVariantNumeric: 'tabular-nums', fontSize: 11 }}>{m.pct}%</span>
+    </div>
+  );
+  if (models.length >= 4) {
+    return (
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', rowGap: 4, columnGap: 14, marginTop: 10 }}>
+        {models.slice(0, 4).map((m, i) => cell(m, i))}
+      </div>
+    );
+  }
+  return (
+    <div style={{ display: 'flex', columnGap: 14, marginTop: 10 }}>
+      {models.map((m, i) => cell(m, i))}
+    </div>
+  );
+}
+
+// ─── Drawer (used by BOTH Claude and Codex heroes) ───────────────────────────
+
+function VD2_Drawer({ t, d }) {
+  return (
+    <div
+      onClick={(e) => e.stopPropagation()}
+      style={{ marginTop: 14, paddingTop: 14, borderTop: `1px solid ${t.border}` }}>
+      <div style={{ display: 'flex', gap: 14, marginBottom: 14 }}>
+        <HairStat label="7-day" value={d.weekTotal || '—'} t={t} />
+        <HairStat label="Month" value={d.monthTotal || '—'} t={t} />
+        {d.sessions && <HairStat label="Sessions" value={d.sessions} t={t} />}
+      </div>
+
+      {d.dayBuckets && d.dayBuckets.length > 0 &&
+        <WeekBarChart data={d.dayBuckets} labels={d.dayLabels || []} units={d.dayUnits || ''} avg={d.weeklyAvg || ''} t={t} />
+      }
+
+      {d.models && d.models.length > 0 && (
+        <div style={{ marginTop: 14 }}>
+          <div style={{
+            display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 6,
+          }}>
+            <span style={{
+              fontFamily: TD_FONTS.serif, fontStyle: 'italic',
+              fontSize: 10.5, color: t.dim, letterSpacing: 0.2,
+            }}>Models</span>
+            <span style={{ flex: 1, height: 1, background: t.hair }} />
+          </div>
+          <ModelBar models={d.models} dark={t.ink === VD2_DARK.ink} />
+          <ModelLegend models={d.models} t={t} />
+        </div>
+      )}
+
+      {(d.topSessions && d.topSessions.length > 0) && (
+        <>
+          <div style={{
+            marginTop: 14, marginBottom: 6,
+            fontFamily: TD_FONTS.serif, fontStyle: 'italic', fontSize: 12, color: t.ink,
+          }}>Top sessions today</div>
+          {d.topSessions.map((s, i) => (
+            <div key={i} style={{
+              display: 'grid', gridTemplateColumns: '70px 1fr 50px',
+              fontSize: 11, padding: '5px 0',
+              color: t.muted, fontFamily: TD_FONTS.mono,
+              borderBottom: i < d.topSessions.length - 1 ? `1px solid ${t.hair}` : 'none',
+              fontVariantNumeric: 'tabular-nums',
+            }}>
+              <span style={{ whiteSpace: 'nowrap' }}>{s.time}</span>
+              <span style={{ color: t.ink, fontWeight: 500, textAlign: 'right' }}>{s.tokens}</span>
+              <span style={{ textAlign: 'right' }}>{s.duration}</span>
+            </div>
+          ))}
+        </>
+      )}
+    </div>
+  );
+}
+
+function HairStat({ label, value, t }) {
+  return (
+    <div style={{ flex: 1, minWidth: 0 }}>
+      <div style={{ fontFamily: TD_FONTS.serif, fontStyle: 'italic', fontSize: 10, color: t.dim, marginBottom: 2 }}>{label}</div>
+      <div style={{ fontFamily: TD_FONTS.mono, fontSize: 13, color: t.ink, fontVariantNumeric: 'tabular-nums', letterSpacing: -0.2 }}>{value}</div>
+    </div>
+  );
+}
+
+function WeekBarChart({ data, labels, units, avg, t }) {
+  const [hoverIdx, setHoverIdx] = React.useState(-1);
+  if (!data || data.length === 0) return null;
+  const max = Math.max(...data, 1);
+  return (
+    <div>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 8 }}>
+        <span style={{ fontFamily: TD_FONTS.serif, fontSize: 12, fontStyle: 'italic', color: t.ink }}>Last 7 days</span>
+        <span style={{ fontFamily: TD_FONTS.mono, fontSize: 10, color: t.dim }}>{avg ? 'avg ' + avg : ''}</span>
+      </div>
+      <div style={{ display: 'flex', alignItems: 'flex-end', gap: 5, height: 52, position: 'relative' }}>
+        {data.map((v, i) => {
+          const h = (v / max) * 36;
+          const isToday = i === data.length - 1;
+          const isHover = i === hoverIdx;
+          return (
+            <div key={i}
+              onMouseEnter={() => setHoverIdx(i)}
+              onMouseLeave={() => setHoverIdx(h => h === i ? -1 : h)}
+              style={{
+                flex: 1, display: 'flex', flexDirection: 'column',
+                alignItems: 'center', gap: 4, cursor: 'default',
+                position: 'relative',
+              }}>
+              {isHover && (
+                <div style={{
+                  position: 'absolute', bottom: 48, left: '50%',
+                  transform: 'translateX(-50%)',
+                  padding: '3px 7px', borderRadius: 4,
+                  background: t.ink, color: t.canvas,
+                  fontSize: 10, fontFamily: TD_FONTS.mono, whiteSpace: 'nowrap',
+                  fontVariantNumeric: 'tabular-nums',
+                  boxShadow: '0 4px 12px rgba(0,0,0,0.18)',
+                  pointerEvents: 'none', zIndex: 10,
+                }}>{formatBarValue(v, units)}</div>
+              )}
+              <div style={{
+                width: '100%', height: Math.max(2, h),
+                background: isHover ? t.coral : (isToday ? t.coral : (t.ink === VD2_DARK.ink ? TD.dBorder : '#EDE7D8')),
+                borderRadius: 2,
+                transition: 'background 120ms ease, transform 120ms ease',
+                transform: isHover ? 'translateY(-1px)' : 'none',
+              }} />
+              <span style={{ fontSize: 9, color: isHover ? t.ink : t.dim, fontFamily: TD_FONTS.mono, transition: 'color 120ms ease' }}>{labels[i] || ''}</span>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function formatBarValue(v, units) {
+  if (units) return v.toFixed(2) + units;
+  if (v >= 1000) return (v / 1000).toFixed(2) + 'K';
+  return v.toFixed(2);
+}
+
+// ─── Codex hero (now expandable) ─────────────────────────────────────────────
+
+function VD2_CodexHero({ t, expanded, onToggle }) {
+  const d = (window.TD_DATA && window.TD_DATA.codex) || MOCK_DATA.codex;
+  const warn = (d.quotas || []).some(q => q.warn || q.pct >= 85);
+  return (
+    <VD2_Hero t={t} warn={warn} expanded={expanded} onToggle={onToggle}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10, paddingRight: 18 }}>
+        <span style={{ fontSize: 13, fontWeight: 600, color: t.ink, whiteSpace: 'nowrap' }}>{d.name}</span>
+        <Pill t={t} tone={d.pill}>{d.pill}</Pill>
+        <span style={{ flex: 1 }} />
+        {d.model && (
+          <span style={{
+            fontFamily: TD_FONTS.mono, fontSize: 9.5, color: t.dim, whiteSpace: 'nowrap',
+            padding: '2px 6px',
+            background: t.ink === VD2_DARK.ink ? t.surfaceAlt : '#F6F2E5',
+            borderRadius: 4,
+          }}>{d.model}</span>
+        )}
+      </div>
+
+      <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', marginBottom: 14, gap: 12 }}>
+        <div style={{ minWidth: 0 }}>
+          <div style={{
+            fontFamily: TD_FONTS.mono, fontSize: 36, color: t.ink,
+            letterSpacing: -1.2, fontVariantNumeric: 'tabular-nums', lineHeight: 0.95,
+          }}>{d.today}</div>
+          <div style={{ fontFamily: TD_FONTS.serif, fontStyle: 'italic', fontSize: 11, color: t.dim, marginTop: 5 }}>tokens today</div>
+        </div>
+      </div>
+
+      {(d.quotas || []).map((q, i) => <VD2_QuotaRow key={i} q={q} t={t} />)}
+
+      {expanded && <VD2_Drawer t={t} d={d} />}
+    </VD2_Hero>
+  );
+}
+
+// ─── Compact rows ────────────────────────────────────────────────────────────
+
+function VD2_Compact({ children, t }) {
+  const [hover, setHover] = React.useState(false);
+  return (
+    <div
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      style={{
+        background: hover ? t.surface : t.compactBg,
+        border: `1px solid ${hover ? t.border : (t.ink === VD2_DARK.ink ? 'rgba(237,230,214,0.06)' : 'rgba(60,45,30,0.04)')}`,
+        borderRadius: 10, padding: '12px 14px', marginBottom: 8, minHeight: 68,
+        boxShadow: hover ? '0 4px 10px rgba(60,45,30,0.07)' : 'none',
+        transform: hover ? 'translateY(-1px)' : 'none',
+        transition: 'all 160ms ease',
+        display: 'flex', alignItems: 'center', gap: 12, position: 'relative',
+      }}>
+      {children}
+      {hover && (
+        <div style={{ color: t.dim, opacity: 0.7, flexShrink: 0 }}>
+          <svg width="11" height="11" viewBox="0 0 12 12" fill="none"><path d="M4.5 2.5l3 3.5-3 3.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/></svg>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function InlineBar({ pct, t, width = 40 }) {
+  return (
+    <div style={{
+      width, height: 4, borderRadius: 2,
+      background: t.ink === VD2_DARK.ink ? TD.dBorder : '#EDE7D8',
+      overflow: 'hidden', flexShrink: 0,
+    }}>
+      <div style={{ width: pct + '%', height: '100%', background: t.coral, borderRadius: 2 }} />
+    </div>
+  );
+}
+
+function VD2_Eleven({ t, d }) {
+  return (
+    <VD2_Compact t={t}>
+      <Monogram letter="E" t={t} tone="creator" />
+      <div style={{ minWidth: 0, flex: '0 0 auto' }}>
+        <div style={{ fontSize: 12, fontWeight: 600, color: t.ink, display: 'flex', alignItems: 'center', gap: 6, whiteSpace: 'nowrap' }}>
+          {d.name}<Pill t={t} tone="creator">{d.pill}</Pill>
+        </div>
+        {d.resets && <div style={{ fontFamily: TD_FONTS.mono, fontSize: 10.5, color: t.dim, marginTop: 3, whiteSpace: 'nowrap' }}>{d.resets}</div>}
+        {d.note && !d.resets && <div style={{ fontFamily: TD_FONTS.serif, fontStyle: 'italic', fontSize: 11, color: t.dim, marginTop: 3 }}>{d.note}</div>}
+      </div>
+      <div style={{ flex: 1 }} />
+      <div style={{ textAlign: 'right', minWidth: 0 }}>
+        {d.pct != null && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, justifyContent: 'flex-end' }}>
+            <InlineBar pct={d.pct} t={t} />
+            <span style={{ fontFamily: TD_FONTS.mono, fontSize: 13, color: t.ink, fontVariantNumeric: 'tabular-nums', fontWeight: 500 }}>{d.pct}%</span>
+          </div>
+        )}
+        {d.usedLabel && (
+          <div style={{ fontFamily: TD_FONTS.mono, fontSize: 10, color: t.dim, marginTop: 3, whiteSpace: 'nowrap' }}>
+            {d.usedLabel} <span style={{ opacity: 0.6 }}>/ {d.totalLabel}</span>
+          </div>
+        )}
+      </div>
+    </VD2_Compact>
+  );
+}
+
+function VD2_Router({ t, d }) {
+  return (
+    <VD2_Compact t={t}>
+      <Monogram letter="O" t={t} tone="payg" />
+      <div style={{ minWidth: 0 }}>
+        <div style={{ fontSize: 12, fontWeight: 600, color: t.ink, display: 'flex', alignItems: 'center', gap: 6, whiteSpace: 'nowrap' }}>
+          {d.name}<Pill t={t} tone="payg">{d.pill}</Pill>
+        </div>
+        {d.spendLabel && <div style={{ fontFamily: TD_FONTS.mono, fontSize: 10.5, color: t.dim, marginTop: 3, whiteSpace: 'nowrap' }}>{d.spendLabel}</div>}
+        {d.note && !d.spendLabel && <div style={{ fontFamily: TD_FONTS.serif, fontStyle: 'italic', fontSize: 11, color: t.dim, marginTop: 3 }}>{d.note}</div>}
+      </div>
+      <div style={{ flex: 1 }} />
+      {d.credits && (
+        <div style={{ textAlign: 'right' }}>
+          <div style={{ fontFamily: TD_FONTS.mono, fontSize: 15, color: t.ink, fontVariantNumeric: 'tabular-nums', letterSpacing: -0.3, lineHeight: 1 }}>{d.credits}</div>
+          <div style={{ fontFamily: TD_FONTS.serif, fontStyle: 'italic', fontSize: 10, color: t.dim, marginTop: 4 }}>left</div>
+        </div>
+      )}
+    </VD2_Compact>
+  );
+}
+
+function VD2_Groq({ t, d }) {
+  return (
+    <VD2_Compact t={t}>
+      <Monogram letter="G" t={t} tone="free" />
+      <div style={{ minWidth: 0, flex: 1 }}>
+        <div style={{ fontSize: 12, fontWeight: 600, color: t.muted, display: 'flex', alignItems: 'center', gap: 6, whiteSpace: 'nowrap' }}>
+          {d.name}<Pill t={t} tone="free">{d.pill}</Pill>
+        </div>
+        <div style={{ fontFamily: TD_FONTS.serif, fontStyle: 'italic', fontSize: 11, color: t.dim, marginTop: 3, lineHeight: 1.3 }}>
+          {d.note || 'no usage API'}
+        </div>
+      </div>
+    </VD2_Compact>
+  );
+}
+
+function VD2_AddBtn({ t }) {
+  const [hover, setHover] = React.useState(false);
+  return (
+    <button
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      onClick={() => postSwift('add-provider')}
+      style={{
+        width: '100%', marginTop: 10,
+        background: hover ? t.surfaceAlt : 'transparent',
+        border: `1px dashed ${t.border}`,
+        borderRadius: 10, padding: '10px',
+        color: hover ? t.ink : t.dim, fontFamily: TD_FONTS.sans, fontSize: 12, fontWeight: 500,
+        cursor: 'pointer', display: 'flex', alignItems: 'center',
+        justifyContent: 'center', gap: 6,
+        transition: 'background 120ms, color 120ms',
+      }}>
+      <svg width="11" height="11" viewBox="0 0 12 12" fill="none"><path d="M6 2v8M2 6h8" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/></svg>
+      <span>Add provider</span>
+    </button>
+  );
+}
+
+function VD2_CompactRouter({ t, p }) {
+  switch (p.kind) {
+    case 'eleven': return <VD2_Eleven t={t} d={p} />;
+    case 'router': return <VD2_Router t={t} d={p} />;
+    case 'groq':   return <VD2_Groq t={t} d={p} />;
+    default:       return <VD2_Groq t={t} d={p} />;
+  }
+}
+
+// ─── Settings overlay ────────────────────────────────────────────────────────
+
+function VD2_Settings({ t, theme, setTheme, onResetOrder, orderDirty }) {
+  const dark = t.ink === VD2_DARK.ink;
+  const themeOptions = [
+    { id: 'light', label: 'Light' },
+    { id: 'dark',  label: 'Dark'  },
+    { id: 'auto',  label: 'Auto'  },
+  ];
+
+  return (
+    <div style={{ padding: '4px 2px 0' }}>
+      <SectionCard t={t}>
+        <SectionLabel t={t}>Appearance</SectionLabel>
+        <div style={{
+          display: 'flex', gap: 0, marginTop: 8,
+          background: dark ? t.surfaceAlt : t.compactBg,
+          borderRadius: 8, padding: 3,
+          border: `1px solid ${t.border}`,
+        }}>
+          {themeOptions.map(opt => (
+            <button key={opt.id}
+              onClick={() => setTheme(opt.id)}
+              style={{
+                flex: 1, border: 'none', cursor: 'pointer',
+                padding: '7px 8px', borderRadius: 6,
+                background: opt.id === theme ? t.surface : 'transparent',
+                color: opt.id === theme ? t.ink : t.muted,
+                fontFamily: TD_FONTS.sans, fontSize: 12,
+                fontWeight: opt.id === theme ? 600 : 500,
+                boxShadow: opt.id === theme
+                  ? (dark ? '0 1px 2px rgba(0,0,0,0.5)' : '0 1px 2px rgba(60,45,30,0.08)')
+                  : 'none',
+                transition: 'all 140ms ease',
+              }}>{opt.label}</button>
+          ))}
+        </div>
+        <div style={{
+          marginTop: 10, fontFamily: TD_FONTS.serif, fontStyle: 'italic',
+          fontSize: 11, color: t.dim, lineHeight: 1.45,
+        }}>
+          Auto follows your macOS system appearance.
+        </div>
+      </SectionCard>
+
+      <SectionCard t={t}>
+        <SectionLabel t={t}>Card layout</SectionLabel>
+        <div style={{
+          marginTop: 8, fontFamily: TD_FONTS.sans,
+          fontSize: 11.5, color: t.muted, lineHeight: 1.55,
+        }}>
+          Drag any card to reorder. The layout is saved to this machine.
+        </div>
+        <button
+          onClick={onResetOrder}
+          disabled={!orderDirty}
+          style={{
+            marginTop: 12, width: '100%',
+            background: 'transparent',
+            border: `1px solid ${t.border}`,
+            color: orderDirty ? t.ink : t.dim,
+            fontFamily: TD_FONTS.sans, fontSize: 11.5,
+            padding: '8px 10px', borderRadius: 8,
+            cursor: orderDirty ? 'pointer' : 'not-allowed',
+            opacity: orderDirty ? 1 : 0.55,
+          }}>
+          {orderDirty ? 'Reset to default order' : 'Default order'}
+        </button>
+      </SectionCard>
+
+      <SectionCard t={t}>
+        <SectionLabel t={t}>About</SectionLabel>
+        <div style={{
+          marginTop: 8, fontFamily: TD_FONTS.sans,
+          fontSize: 11.5, color: t.muted, lineHeight: 1.55,
+        }}>
+          TokenDash reads Claude Code and Codex CLI logs locally.
+          Nothing leaves your machine.
+        </div>
+        <div style={{
+          marginTop: 10, fontFamily: TD_FONTS.mono, fontSize: 10.5,
+          color: t.dim, lineHeight: 1.55, wordBreak: 'break-all',
+        }}>
+          ~/.claude/projects/<br />
+          ~/.codex/sessions/
+        </div>
+      </SectionCard>
+    </div>
+  );
+}
+
+function SectionCard({ children, t }) {
+  return (
+    <div style={{
+      background: t.surface,
+      border: `1px solid ${t.border}`,
+      borderRadius: 12, padding: '14px 16px', marginBottom: 10,
+      boxShadow: t.ink === VD2_DARK.ink ? 'none' : '0 1px 0 rgba(60,45,30,0.02)',
+    }}>{children}</div>
+  );
+}
+
+function SectionLabel({ children, t }) {
+  return (
+    <div style={{
+      fontFamily: TD_FONTS.serif, fontStyle: 'italic',
+      fontSize: 11, color: t.ink, letterSpacing: 0.1,
+    }}>{children}</div>
+  );
+}
+
+function LimitRow({ t, label, value }) {
+  return (
+    <div style={{
+      display: 'flex', alignItems: 'baseline', justifyContent: 'space-between',
+      gap: 8,
+    }}>
+      <span style={{ fontSize: 12, color: t.muted }}>{label}</span>
+      <span style={{
+        fontFamily: TD_FONTS.mono, fontSize: 14, color: t.ink,
+        fontVariantNumeric: 'tabular-nums', letterSpacing: -0.2,
+      }}>{value}</span>
+    </div>
+  );
+}
+
+// ─── Drag-and-drop reorder (with live push-out-of-way FLIP animation) ────────
+//
+// Module-level drag state: HTML5 DnD doesn't let us read dataTransfer during
+// dragover (only during drop), so we stash the active drag here.
+const _dragState = { group: null, id: null };
+
+function useOrder(key, defaultOrder) {
+  const [order, setOrder] = React.useState(() => {
+    try {
+      const s = window.localStorage.getItem(key);
+      if (s) {
+        const parsed = JSON.parse(s);
+        if (Array.isArray(parsed)) return parsed;
+      }
+    } catch (e) {}
+    return defaultOrder;
+  });
+  React.useEffect(() => {
+    try { window.localStorage.setItem(key, JSON.stringify(order)); } catch (e) {}
+  }, [order, key]);
+  // Reconcile against current defaultOrder — add any new ids, drop missing ones,
+  // preserving user's existing order for ids that still exist.
+  const reconciled = React.useMemo(() => {
+    const kept = order.filter(id => defaultOrder.includes(id));
+    const added = defaultOrder.filter(id => !kept.includes(id));
+    return [...kept, ...added];
+  }, [order, defaultOrder.join('|')]);
+  const reset = React.useCallback(() => setOrder(defaultOrder.slice()), [defaultOrder.join('|')]);
+  return [reconciled, setOrder, reset];
+}
+
+// FLIP animation: measure each draggable's rect before/after order changes,
+// then play the inverse translate so the browser animates it back to 0.
+function Draggable({ id, group, order, setOrder, t, children }) {
+  const ref = React.useRef(null);
+  const prevRectRef = React.useRef(null);
+  const [dragging, setDragging] = React.useState(false);
+
+  React.useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const prev = prevRectRef.current;
+    const curr = el.getBoundingClientRect();
+    if (prev && !dragging && (prev.top !== curr.top || prev.left !== curr.left)) {
+      const dx = prev.left - curr.left;
+      const dy = prev.top - curr.top;
+      el.style.transition = 'none';
+      el.style.transform = `translate(${dx}px, ${dy}px)`;
+      // force reflow so the transition picks up the inverse transform as start
+      void el.offsetHeight;
+      el.style.transition = 'transform 260ms cubic-bezier(0.2, 0.8, 0.2, 1)';
+      el.style.transform = '';
+    }
+    prevRectRef.current = curr;
+  });
+
+  const reorder = (srcId) => {
+    setOrder(ord => {
+      if (srcId === id) return ord;
+      const next = ord.slice();
+      const from = next.indexOf(srcId);
+      const to = next.indexOf(id);
+      if (from < 0 || to < 0) return ord;
+      next.splice(from, 1);
+      next.splice(to, 0, srcId);
+      return next;
+    });
+  };
+
+  return (
+    <div
+      ref={ref}
+      draggable
+      onDragStart={(e) => {
+        _dragState.group = group;
+        _dragState.id = id;
+        e.dataTransfer.effectAllowed = 'move';
+        // Some browsers require non-empty data for drag to start.
+        try { e.dataTransfer.setData('text/plain', id); } catch (err) {}
+        // Defer the "dragging" style so the drag image is captured at full opacity.
+        setTimeout(() => setDragging(true), 0);
+      }}
+      onDragEnd={() => {
+        setDragging(false);
+        _dragState.group = null;
+        _dragState.id = null;
+      }}
+      onDragOver={(e) => {
+        if (_dragState.group !== group || _dragState.id == null) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'move';
+        if (_dragState.id !== id) reorder(_dragState.id);
+      }}
+      onDrop={(e) => {
+        if (_dragState.group !== group) return;
+        e.preventDefault();
+        // reorder already happened via dragover; nothing more to do.
+      }}
+      style={{
+        position: 'relative',
+        opacity: dragging ? 0.35 : 1,
+        // No CSS transition here — the FLIP effect controls transform inline.
+        borderRadius: 14,
+        cursor: dragging ? 'grabbing' : 'auto',
+      }}>
+      {children}
+    </div>
+  );
+}
+
+// ─── Root ────────────────────────────────────────────────────────────────────
+
+function VD2_App() {
+  const [route, setRoute] = React.useState('dashboard');
+  const [expanded, setExpanded] = React.useState({ claude: false, codex: false });
+  const toggle = (k) => setExpanded(s => ({ ...s, [k]: !s[k] }));
+
+  // Theme: 'light' | 'dark' | 'auto'
+  const [theme, setThemeState] = React.useState(() => {
+    try { return window.localStorage.getItem('td.theme') || 'auto'; }
+    catch (e) { return 'auto'; }
+  });
+  const setTheme = (v) => {
+    setThemeState(v);
+    try { window.localStorage.setItem('td.theme', v); } catch (e) {}
+  };
+  const [systemDark, setSystemDark] = React.useState(() =>
+    window.matchMedia('(prefers-color-scheme: dark)').matches);
+  React.useEffect(() => {
+    const mq = window.matchMedia('(prefers-color-scheme: dark)');
+    const h = (e) => setSystemDark(e.matches);
+    mq.addEventListener('change', h);
+    return () => mq.removeEventListener('change', h);
+  }, []);
+  const dark = theme === 'dark' || (theme === 'auto' && systemDark);
+
+  const [, force] = React.useReducer(x => x + 1, 0);
+  React.useEffect(() => { window.__render = force; }, []);
+
+  const t = dark ? VD2_DARK : VD2_LIGHT;
+  const providers = (window.TD_DATA && window.TD_DATA.providers) || MOCK_DATA.providers;
+
+  const defaultHeroOrder = ['claude', 'codex'];
+  const [heroOrder, setHeroOrder, resetHero] = useOrder('td.heroOrder', defaultHeroOrder);
+  const providerIds = providers.map(p => p.id);
+  const [providerOrder, setProviderOrder, resetProviders] = useOrder('td.providerOrder', providerIds);
+  const orderDirty =
+    heroOrder.join(',') !== defaultHeroOrder.join(',') ||
+    providerOrder.join(',') !== providerIds.join(',');
+  const resetOrder = () => { resetHero(); resetProviders(); };
+  const providersById = {};
+  providers.forEach(p => { providersById[p.id] = p; });
+
+  const renderHero = (id) => {
+    if (id === 'claude') {
+      return <VD2_ClaudeHero t={t} expanded={expanded.claude} onToggle={() => toggle('claude')} />;
+    }
+    if (id === 'codex') {
+      return <VD2_CodexHero t={t} expanded={expanded.codex} onToggle={() => toggle('codex')} />;
+    }
+    return null;
+  };
+
+  return (
+    <VD2_Shell
+      dark={dark}
+      route={route}
+      onSettings={() => setRoute('settings')}
+      onBack={() => setRoute('dashboard')}>
+      {route === 'settings' ? (
+        <VD2_Settings
+          t={t}
+          theme={theme}
+          setTheme={setTheme}
+          onResetOrder={resetOrder}
+          orderDirty={orderDirty} />
+      ) : (
+        <>
+          {heroOrder.map(id => (
+            <Draggable key={id} id={id} group="hero" order={heroOrder} setOrder={setHeroOrder} t={t}>
+              {renderHero(id)}
+            </Draggable>
+          ))}
+          <div style={{
+            fontFamily: TD_FONTS.serif, fontStyle: 'italic', fontSize: 11,
+            color: t.dim, letterSpacing: 0.2,
+            padding: '2px 4px 8px', display: 'flex', alignItems: 'center', gap: 8,
+          }}>
+            <span>Other providers</span>
+            <span style={{ flex: 1, height: 1, background: t.hair }} />
+          </div>
+          {providerOrder.map(id => {
+            const p = providersById[id];
+            if (!p) return null;
+            return (
+              <Draggable key={id} id={id} group="provider" order={providerOrder} setOrder={setProviderOrder} t={t}>
+                <VD2_CompactRouter t={t} p={p} />
+              </Draggable>
+            );
+          })}
+          <VD2_AddBtn t={t} />
+        </>
+      )}
+    </VD2_Shell>
+  );
+}
+
+// Bootstrap
+window.__render = () => {};
+window.__update = function (json) {
+  try { window.TD_DATA = JSON.parse(json); } catch (e) { console.error(e); }
+  if (window.__render) window.__render();
+};
+
+const root = ReactDOM.createRoot(document.getElementById('root'));
+root.render(<VD2_App />);

@@ -1,0 +1,592 @@
+// Variant D2 Ñ Tiered Hybrid, iterated
+// Changes vs D:
+//  ¥ Both hero cards show 2 quota bars under the headline (5h + Weekly)
+//  ¥ Hero footer stats moved INTO the expanded drawer
+//  ¥ Lighter "claude.ai product UI" palette (canvas #FAF9F5, surfaces near #FFF)
+
+const VD2_W = 420;
+const VD2_H = 620;
+
+// Light product palette
+const VD2_LIGHT = {
+  canvas: '#FAF9F5',
+  surface: '#FFFFFF',
+  surfaceAlt: '#F5F3EC',
+  compactBg: '#F3F1EA',
+  border: '#E8E4D8',
+  borderSoft: '#EFEBDE',
+  hair: 'rgba(26,25,21,0.07)',
+  ink: '#1A1915',
+  muted: '#6B6860',
+  dim: '#9B978C',
+  coral: '#CC785C',
+  green: '#6B8E5A',
+  red: '#B44A3A',
+};
+const VD2_DARK = {
+  canvas: '#1C1A16',
+  surface: '#24221C',
+  surfaceAlt: '#2B2820',
+  compactBg: 'rgba(237,230,214,0.03)',
+  border: '#3A3529',
+  borderSoft: '#302C24',
+  hair: 'rgba(237,230,214,0.08)',
+  ink: '#EDE6D6',
+  muted: '#A39E90',
+  dim: '#7A7668',
+  coral: '#D98B6F',
+  green: '#8FA87C',
+  red: '#D07565',
+};
+
+// Add Claude + Codex week+5h quotas to data
+const VD2_DATA = {
+  claude: {
+    ...TD_DATA.claude,
+    quotas: [
+      { label: '5h window', pct: 52, color: 'coral', resets: 'resets in 1h 48m' },
+      { label: 'Weekly',    pct: 71, color: 'coral', resets: 'resets in 4d 12h' },
+    ],
+    sessions: '47',
+  },
+  codex: {
+    ...TD_DATA.codex,
+  },
+};
+
+function VD2_Shell({ children, dark = false }) {
+  const t = dark ? VD2_DARK : VD2_LIGHT;
+  return (
+    <div style={{
+      width: VD2_W, height: VD2_H, background: t.canvas,
+      borderRadius: 12, border: `1px solid ${t.border}`,
+      boxShadow: dark
+        ? '0 1px 2px rgba(0,0,0,0.4), 0 20px 50px rgba(0,0,0,0.5)'
+        : '0 1px 2px rgba(60,45,30,0.04), 0 18px 44px rgba(60,45,30,0.10)',
+      fontFamily: TD_FONTS.sans, color: t.ink, overflow: 'hidden',
+      position: 'relative', display: 'flex', flexDirection: 'column',
+    }}>
+      <MenuBarStrip dark={dark} />
+      <VD2_Header t={t} dark={dark} />
+      <div style={{
+        flex: 1, overflowY: 'auto', padding: '12px 14px',
+        display: 'flex', flexDirection: 'column', gap: 0,
+      }}>{children}</div>
+      <VD2_Footer t={t} />
+    </div>
+  );
+}
+
+function VD2_Header({ t, dark }) {
+  return (
+    <div style={{
+      padding: '14px 16px 12px', borderBottom: `1px solid ${t.border}`,
+      display: 'flex', alignItems: 'center', gap: 10,
+      background: dark ? t.surface : '#FFFFFF',
+    }}>
+      <span style={{
+        width: 7, height: 7, borderRadius: 10, background: t.coral,
+        boxShadow: `0 0 0 3px ${t.coral}22`, flexShrink: 0,
+      }} />
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{
+          fontFamily: TD_FONTS.serif, fontSize: 20, fontWeight: 500,
+          letterSpacing: -0.3, color: t.ink, lineHeight: 1,
+        }}>TokenDash</div>
+        <div style={{ fontSize: 10.5, color: t.dim, marginTop: 3, whiteSpace: 'nowrap' }}>
+          Updated <span style={{ fontFamily: TD_FONTS.mono }}>12s</span> ago á 2 active á 3 idle
+        </div>
+      </div>
+      {[
+        <svg key="r" width="13" height="13" viewBox="0 0 13 13" fill="none"><path d="M11 6.5A4.5 4.5 0 1110 3.5M11 1.5v2.5h-2.5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/></svg>,
+        <svg key="g" width="13" height="13" viewBox="0 0 13 13" fill="none"><circle cx="6.5" cy="6.5" r="1.5" stroke="currentColor" strokeWidth="1.2"/><path d="M6.5 1.5v1.5m0 7.5v1.5M1.5 6.5h1.5m7.5 0h1.5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round"/></svg>,
+        <svg key="k" width="13" height="13" viewBox="0 0 13 13" fill="none"><circle cx="3" cy="6.5" r="1" fill="currentColor"/><circle cx="6.5" cy="6.5" r="1" fill="currentColor"/><circle cx="10" cy="6.5" r="1" fill="currentColor"/></svg>,
+      ].map((s, i) => (
+        <button key={i} style={{
+          width: 26, height: 26, border: 'none', background: 'transparent',
+          borderRadius: 6, cursor: 'pointer', color: t.muted,
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+        }}>{s}</button>
+      ))}
+    </div>
+  );
+}
+
+function VD2_Footer({ t }) {
+  return (
+    <div style={{
+      padding: '10px 16px', borderTop: `1px solid ${t.border}`,
+      display: 'flex', alignItems: 'center', gap: 8,
+      fontSize: 10.5, color: t.dim,
+    }}>
+      <span style={{
+        width: 5, height: 5, borderRadius: 10, background: t.coral,
+        animation: 'td-blink 1.8s ease-in-out infinite', flexShrink: 0,
+      }} />
+      <span style={{ fontFamily: TD_FONTS.serif, fontStyle: 'italic', whiteSpace: 'nowrap' }}>5 providers</span>
+      <span style={{ opacity: 0.4 }}>á</span>
+      <span style={{ fontFamily: TD_FONTS.mono, whiteSpace: 'nowrap' }}>next refresh 18s</span>
+    </div>
+  );
+}
+
+function VD2_Pill({ children, t, tone }) {
+  const dark = t.ink === VD2_DARK.ink;
+  const tones = dark ? {
+    max:     { bg: 'rgba(217,139,111,0.2)', fg: t.coral },
+    plus:    { bg: 'rgba(143,168,124,0.2)', fg: t.green },
+    creator: { bg: 'rgba(170,140,200,0.2)', fg: '#B79ED6' },
+    payg:    { bg: 'rgba(200,160,110,0.2)', fg: '#C9A878' },
+    free:    { bg: 'rgba(237,230,214,0.08)', fg: t.dim },
+  } : {
+    max:     { bg: '#F5E3DB', fg: '#B86446' },
+    plus:    { bg: '#E4EBDB', fg: '#5B7A4C' },
+    creator: { bg: '#E7DFF1', fg: '#6A5A8B' },
+    payg:    { bg: '#F0E5D8', fg: '#8B6A45' },
+    free:    { bg: '#EDEBE3', fg: t.dim },
+  };
+  const s = tones[tone];
+  return (
+    <span style={{
+      display: 'inline-flex', alignItems: 'center',
+      padding: '1px 7px', borderRadius: 10, flexShrink: 0,
+      fontSize: 9.5, fontWeight: 500, letterSpacing: 0.3,
+      background: s.bg, color: s.fg, whiteSpace: 'nowrap',
+    }}>{children}</span>
+  );
+}
+
+function VD2_Mono({ letter, t, tone }) {
+  const dark = t.ink === VD2_DARK.ink;
+  const tones = dark ? {
+    creator: { bg: 'rgba(170,140,200,0.18)', fg: '#B79ED6' },
+    payg:    { bg: 'rgba(200,160,110,0.18)', fg: '#C9A878' },
+    free:    { bg: 'rgba(237,230,214,0.06)', fg: t.dim },
+  } : {
+    creator: { bg: '#E7DFF1', fg: '#6A5A8B' },
+    payg:    { bg: '#F0E5D8', fg: '#8B6A45' },
+    free:    { bg: '#EDEBE3', fg: t.dim },
+  };
+  const s = tones[tone];
+  return (
+    <div style={{
+      width: 28, height: 28, borderRadius: 14,
+      background: s.bg, color: s.fg, flexShrink: 0,
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
+      fontFamily: TD_FONTS.serif, fontSize: 14, fontWeight: 500,
+    }}>{letter}</div>
+  );
+}
+
+// Quota bar supporting light color tinting
+function VD2_Quota({ pct, t, warn, dark }) {
+  const track = dark ? t.border : '#EEEAE0';
+  const fg = warn ? t.red : t.coral;
+  return (
+    <div style={{
+      position: 'relative', width: '100%', height: 5, borderRadius: 3,
+      background: track, overflow: 'hidden',
+    }}>
+      <div style={{
+        position: 'absolute', top: 0, left: 0, bottom: 0,
+        width: Math.min(100, pct) + '%',
+        background: fg, borderRadius: 3,
+        animation: warn ? 'td-pulse 2.2s ease-in-out infinite' : undefined,
+      }} />
+    </div>
+  );
+}
+
+// The hero quota pair Ñ used for both Claude + Codex
+function VD2_QuotaPair({ quotas, t, dark }) {
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 14 }}>
+      {quotas.map((q, i) => {
+        const warn = q.pct > 85;
+        return (
+          <div key={i}>
+            <div style={{
+              display: 'flex', justifyContent: 'space-between', alignItems: 'baseline',
+              marginBottom: 5, gap: 8,
+            }}>
+              <span style={{
+                fontFamily: TD_FONTS.sans, fontSize: 10.5, color: t.muted,
+                fontWeight: 500, whiteSpace: 'nowrap',
+              }}>{q.label}</span>
+              <span style={{
+                flex: 1, minWidth: 0, overflow: 'hidden',
+                fontFamily: TD_FONTS.mono, fontSize: 9.5, color: t.dim,
+                whiteSpace: 'nowrap', textAlign: 'left', paddingLeft: 10,
+              }}>{q.resets}</span>
+              <span style={{
+                fontFamily: TD_FONTS.mono, fontSize: 11,
+                color: warn ? t.red : t.ink, fontWeight: 500,
+                fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap',
+              }}>{q.pct}%</span>
+            </div>
+            <VD2_Quota pct={q.pct} t={t} warn={warn} dark={dark} />
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function VD2_Hero({ children, t, warn, expanded }) {
+  return (
+    <div style={{
+      background: t.surface,
+      border: `1px solid ${warn ? (t.ink === VD2_DARK.ink ? '#8B4A3C' : '#EAC9BE') : t.border}`,
+      borderRadius: 14, padding: '14px 16px', marginBottom: 12,
+      boxShadow: t.ink === VD2_DARK.ink ? 'none' : '0 1px 2px rgba(60,45,30,0.04)',
+      position: 'relative',
+    }}>
+      {children}
+      {expanded && <VD2_Drawer t={t} />}
+    </div>
+  );
+}
+
+function VD2_HairStat({ label, value, t }) {
+  return (
+    <div style={{ flex: 1, minWidth: 0 }}>
+      <div style={{
+        fontFamily: TD_FONTS.serif, fontStyle: 'italic',
+        fontSize: 10, color: t.dim, marginBottom: 2,
+      }}>{label}</div>
+      <div style={{
+        fontFamily: TD_FONTS.mono, fontSize: 14, color: t.ink,
+        fontVariantNumeric: 'tabular-nums', letterSpacing: -0.2,
+      }}>{value}</div>
+    </div>
+  );
+}
+
+function VD2_Drawer({ t }) {
+  const bars = [6.2, 7.8, 5.4, 9.1, 8.3, 10.6, 11.8];
+  const days = ['M','T','W','T','F','S','S'];
+  const dark = t.ink === VD2_DARK.ink;
+  return (
+    <div style={{ marginTop: 14, paddingTop: 14, borderTop: `1px solid ${t.border}` }}>
+      {/* Stats moved here from hero footer */}
+      <div style={{ display: 'flex', gap: 14, marginBottom: 14 }}>
+        <VD2_HairStat label="7-day" value="58.3M" t={t} />
+        <VD2_HairStat label="Month" value="214.6M" t={t} />
+        <VD2_HairStat label="Sessions" value="47" t={t} />
+      </div>
+
+      <div style={{
+        display: 'flex', justifyContent: 'space-between', alignItems: 'baseline',
+        marginBottom: 10,
+      }}>
+        <span style={{ fontFamily: TD_FONTS.serif, fontSize: 12, fontStyle: 'italic', color: t.ink }}>Last 7 days</span>
+        <span style={{ fontFamily: TD_FONTS.mono, fontSize: 10, color: t.dim }}>avg 8.5M</span>
+      </div>
+      <div style={{ display: 'flex', alignItems: 'flex-end', gap: 5, height: 42 }}>
+        {bars.map((v, i) => (
+          <div key={i} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4 }}>
+            <div style={{
+              width: '100%', height: (v / 12) * 34,
+              background: i === bars.length - 1 ? t.coral : (dark ? t.border : '#EEEAE0'),
+              borderRadius: 2,
+            }} />
+            <span style={{ fontSize: 9, color: t.dim, fontFamily: TD_FONTS.mono }}>{days[i]}</span>
+          </div>
+        ))}
+      </div>
+      <div style={{
+        marginTop: 14, marginBottom: 6,
+        fontFamily: TD_FONTS.serif, fontStyle: 'italic', fontSize: 12, color: t.ink,
+      }}>Top sessions today</div>
+      {[
+        { t: '2:14 PM', tok: '2.4M', dur: '38m' },
+        { t: '11:02 AM', tok: '1.9M', dur: '24m' },
+        { t: '9:48 AM', tok: '1.1M', dur: '14m' },
+      ].map((s, i) => (
+        <div key={i} style={{
+          display: 'grid', gridTemplateColumns: '70px 1fr 50px',
+          fontSize: 11, padding: '5px 0',
+          color: t.muted, fontFamily: TD_FONTS.mono,
+          borderBottom: i < 2 ? `1px solid ${t.hair}` : 'none',
+        }}>
+          <span style={{ whiteSpace: 'nowrap' }}>{s.t}</span>
+          <span style={{ color: t.ink, fontWeight: 500, textAlign: 'right' }}>{s.tok}</span>
+          <span style={{ textAlign: 'right' }}>{s.dur}</span>
+        </div>
+      ))}
+      <button style={{
+        marginTop: 10, background: t.coral, color: '#fff', border: 'none',
+        padding: '6px 12px', borderRadius: 6, fontSize: 11, fontWeight: 500,
+        cursor: 'pointer', fontFamily: TD_FONTS.sans,
+      }}>View all sessions ?</button>
+    </div>
+  );
+}
+
+// ?? Hero: Claude ????
+function VD2_ClaudeHero({ t, expanded }) {
+  const d = VD2_DATA.claude;
+  const dark = t.ink === VD2_DARK.ink;
+  return (
+    <VD2_Hero t={t} expanded={expanded}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+        <span style={{ fontSize: 13, fontWeight: 600, color: t.ink, whiteSpace: 'nowrap', minWidth: 0 }}>{d.name}</span>
+        <VD2_Pill t={t} tone="max">{d.pill}</VD2_Pill>
+        <span style={{ flex: 1 }} />
+        <span style={{ fontFamily: TD_FONTS.mono, fontSize: 9, color: t.dim, whiteSpace: 'nowrap' }}>live</span>
+      </div>
+
+      <div style={{
+        display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between',
+        marginBottom: 4, gap: 12,
+      }}>
+        <div style={{ minWidth: 0 }}>
+          <div style={{
+            fontFamily: TD_FONTS.mono, fontSize: 40, fontWeight: 400,
+            letterSpacing: -1.4, color: t.ink, lineHeight: 0.95,
+            fontVariantNumeric: 'tabular-nums',
+          }}>{d.today}</div>
+          <div style={{
+            fontFamily: TD_FONTS.serif, fontStyle: 'italic',
+            fontSize: 11, color: t.dim, marginTop: 5,
+          }}>tokens today</div>
+        </div>
+        <div style={{ textAlign: 'right', flexShrink: 0, paddingRight: 2 }}>
+          <Sparkline data={d.spark} width={82} height={26} stroke={t.coral}
+            fill={dark ? 'rgba(217,139,111,0.18)' : 'rgba(204,120,92,0.12)'} />
+          <div style={{
+            fontFamily: TD_FONTS.mono, fontSize: 10,
+            color: dark ? t.green : '#5B7A4C',
+            marginTop: 5, whiteSpace: 'nowrap',
+          }}>? 28% vs last wk</div>
+        </div>
+      </div>
+
+      {/* Quotas under headline */}
+      <VD2_QuotaPair quotas={d.quotas} t={t} dark={dark} />
+
+      {/* Model mix */}
+      <div style={{ marginTop: 14 }}>
+        <ModelBar models={d.models} dark={dark} height={6} />
+        <div style={{
+          display: 'grid', gridTemplateColumns: '1fr 1fr', rowGap: 4, columnGap: 14,
+          marginTop: 10, fontSize: 11,
+        }}>
+          {d.models.map((m, i) => {
+            const colors = dark
+              ? ['#D98B6F', '#C48872', '#9E6E5C', '#5E544A']
+              : [t.coral, '#D89780', '#B8897C', '#A59684'];
+            return (
+              <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+                <span style={{ width: 7, height: 7, borderRadius: 2, background: colors[i], flexShrink: 0 }} />
+                <span style={{ color: t.muted, flex: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{m.name}</span>
+                <span style={{ fontFamily: TD_FONTS.mono, color: t.ink, fontVariantNumeric: 'tabular-nums' }}>{m.pct}%</span>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </VD2_Hero>
+  );
+}
+
+// ?? Hero: Codex ????
+function VD2_CodexHero({ t }) {
+  const d = VD2_DATA.codex;
+  const dark = t.ink === VD2_DARK.ink;
+  return (
+    <VD2_Hero t={t} warn>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+        <span style={{ fontSize: 13, fontWeight: 600, color: t.ink, whiteSpace: 'nowrap', minWidth: 0 }}>{d.name}</span>
+        <VD2_Pill t={t} tone="plus">{d.pill}</VD2_Pill>
+        <span style={{ flex: 1 }} />
+        <span style={{
+          fontFamily: TD_FONTS.mono, fontSize: 9.5, color: t.dim, whiteSpace: 'nowrap',
+          padding: '2px 6px',
+          background: dark ? t.surfaceAlt : t.canvas, borderRadius: 4,
+        }}>{d.model}</span>
+      </div>
+
+      <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', gap: 12 }}>
+        <div style={{ minWidth: 0 }}>
+          <div style={{
+            fontFamily: TD_FONTS.mono, fontSize: 36, color: t.ink,
+            letterSpacing: -1.2, fontVariantNumeric: 'tabular-nums', lineHeight: 0.95,
+          }}>{d.today}</div>
+          <div style={{
+            fontFamily: TD_FONTS.serif, fontStyle: 'italic',
+            fontSize: 11, color: t.dim, marginTop: 5,
+          }}>tokens today</div>
+        </div>
+      </div>
+
+      {/* Quotas (the hero element for this provider) */}
+      <VD2_QuotaPair quotas={d.quotas} t={t} dark={dark} />
+    </VD2_Hero>
+  );
+}
+
+// ?? Compact tier ????
+function VD2_Compact({ t, children, hovered, last }) {
+  const dark = t.ink === VD2_DARK.ink;
+  return (
+    <div style={{
+      background: hovered ? t.surface : t.compactBg,
+      border: `1px solid ${hovered ? t.border : (dark ? 'rgba(237,230,214,0.05)' : 'rgba(60,45,30,0.04)')}`,
+      borderRadius: 10, padding: '12px 14px',
+      marginBottom: last ? 0 : 8, minHeight: 68,
+      boxShadow: hovered
+        ? (dark ? '0 4px 14px rgba(0,0,0,0.5)' : '0 3px 10px rgba(60,45,30,0.06)')
+        : 'none',
+      transform: hovered ? 'translateY(-1px)' : 'none',
+      transition: 'all 160ms ease',
+      display: 'flex', alignItems: 'center', gap: 12, position: 'relative',
+    }}>{children}</div>
+  );
+}
+
+function VD2_InlineBar({ pct, t }) {
+  const dark = t.ink === VD2_DARK.ink;
+  return (
+    <div style={{
+      width: 40, height: 4, borderRadius: 2,
+      background: dark ? t.border : '#EEEAE0',
+      overflow: 'hidden', flexShrink: 0,
+    }}>
+      <div style={{ width: pct + '%', height: '100%', background: t.coral }} />
+    </div>
+  );
+}
+
+function VD2_Eleven({ t }) {
+  const d = TD_DATA.eleven;
+  return (
+    <VD2_Compact t={t}>
+      <VD2_Mono letter="E" t={t} tone="creator" />
+      <div style={{ minWidth: 0 }}>
+        <div style={{
+          fontSize: 12, fontWeight: 600, color: t.ink,
+          display: 'flex', alignItems: 'center', gap: 6, whiteSpace: 'nowrap',
+        }}>
+          {d.name}
+          <VD2_Pill t={t} tone="creator">{d.pill}</VD2_Pill>
+        </div>
+        <div style={{
+          fontFamily: TD_FONTS.mono, fontSize: 10.5, color: t.dim, marginTop: 3,
+          whiteSpace: 'nowrap',
+        }}>resets Apr 27</div>
+      </div>
+      <div style={{ flex: 1 }} />
+      <div style={{ textAlign: 'right' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, justifyContent: 'flex-end' }}>
+          <VD2_InlineBar pct={d.pct} t={t} />
+          <span style={{
+            fontFamily: TD_FONTS.mono, fontSize: 13, color: t.ink,
+            fontVariantNumeric: 'tabular-nums', fontWeight: 500,
+          }}>{d.pct}%</span>
+        </div>
+        <div style={{
+          fontFamily: TD_FONTS.mono, fontSize: 10, color: t.dim, marginTop: 3,
+          whiteSpace: 'nowrap',
+        }}>{d.used.toLocaleString()} <span style={{ opacity: 0.6 }}>/ 100K</span></div>
+      </div>
+    </VD2_Compact>
+  );
+}
+
+function VD2_Router({ t }) {
+  const d = TD_DATA.router;
+  return (
+    <VD2_Compact t={t}>
+      <VD2_Mono letter="O" t={t} tone="payg" />
+      <div style={{ minWidth: 0 }}>
+        <div style={{
+          fontSize: 12, fontWeight: 600, color: t.ink,
+          display: 'flex', alignItems: 'center', gap: 6, whiteSpace: 'nowrap',
+        }}>
+          {d.name}
+          <VD2_Pill t={t} tone="payg">{d.pill}</VD2_Pill>
+        </div>
+        <div style={{
+          fontFamily: TD_FONTS.mono, fontSize: 10.5, color: t.dim, marginTop: 3,
+          whiteSpace: 'nowrap',
+        }}>{d.day.spend} á 24h</div>
+      </div>
+      <div style={{ flex: 1 }} />
+      <div style={{ textAlign: 'right' }}>
+        <div style={{
+          fontFamily: TD_FONTS.mono, fontSize: 15, color: t.ink,
+          fontVariantNumeric: 'tabular-nums', letterSpacing: -0.3, lineHeight: 1,
+        }}>{d.credits}</div>
+        <div style={{
+          fontFamily: TD_FONTS.serif, fontStyle: 'italic', fontSize: 10,
+          color: t.dim, marginTop: 4,
+        }}>left</div>
+      </div>
+    </VD2_Compact>
+  );
+}
+
+function VD2_Groq({ t }) {
+  const d = TD_DATA.groq;
+  return (
+    <VD2_Compact t={t} last>
+      <VD2_Mono letter="G" t={t} tone="free" />
+      <div style={{ minWidth: 0, flex: 1 }}>
+        <div style={{
+          fontSize: 12, fontWeight: 600, color: t.muted,
+          display: 'flex', alignItems: 'center', gap: 6, whiteSpace: 'nowrap',
+        }}>
+          {d.name}
+          <VD2_Pill t={t} tone="free">{d.pill}</VD2_Pill>
+        </div>
+        <div style={{
+          fontFamily: TD_FONTS.serif, fontStyle: 'italic', fontSize: 11,
+          color: t.dim, marginTop: 3, lineHeight: 1.3,
+        }}>no usage API Ñ key stored</div>
+      </div>
+    </VD2_Compact>
+  );
+}
+
+function VD2_AddBtn({ t }) {
+  return (
+    <button style={{
+      width: '100%', marginTop: 10,
+      background: 'transparent', border: `1px dashed ${t.border}`,
+      borderRadius: 10, padding: '10px',
+      color: t.dim, fontFamily: TD_FONTS.sans, fontSize: 12, fontWeight: 500,
+      cursor: 'pointer', display: 'flex', alignItems: 'center',
+      justifyContent: 'center', gap: 6,
+    }}>
+      <svg width="11" height="11" viewBox="0 0 12 12" fill="none">
+        <path d="M6 2v8M2 6h8" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/>
+      </svg>
+      <span>Add provider</span>
+    </button>
+  );
+}
+
+function VD2_Default({ dark, expandedClaude }) {
+  const t = dark ? VD2_DARK : VD2_LIGHT;
+  return (
+    <VD2_Shell dark={dark}>
+      <VD2_ClaudeHero t={t} expanded={expandedClaude} />
+      <VD2_CodexHero t={t} />
+      <div style={{
+        fontFamily: TD_FONTS.serif, fontStyle: 'italic', fontSize: 11,
+        color: t.dim, letterSpacing: 0.2,
+        padding: '2px 4px 8px', display: 'flex', alignItems: 'center', gap: 8,
+      }}>
+        <span>Other providers</span>
+        <span style={{ flex: 1, height: 1, background: t.hair }} />
+      </div>
+      <VD2_Eleven t={t} />
+      <VD2_Router t={t} />
+      <VD2_Groq t={t} />
+      <VD2_AddBtn t={t} />
+    </VD2_Shell>
+  );
+}
+
+Object.assign(window, { VD2_Default, VD2_W, VD2_H, VD2_LIGHT, VD2_DARK });
