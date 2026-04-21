@@ -9,7 +9,13 @@ struct TokenTotals: Equatable {
     var cacheWriteTokens: Int = 0
     var reasoningTokens: Int = 0
 
-    var billableTotal: Int { inputTokens + outputTokens + cacheWriteTokens + reasoningTokens }
+    /// What Claude Code / OpenAI dashboards call "total tokens": input + output
+    /// (plus reasoning for reasoning models). Does NOT include cache creation
+    /// or cache read tokens — those are reported separately so we match what
+    /// users see in the official UI. If you need "everything you pay for in
+    /// raw units" use `grandTotal`; if you need "what the official dashboard
+    /// shows" use `billableTotal`.
+    var billableTotal: Int { inputTokens + outputTokens + reasoningTokens }
     var grandTotal: Int { inputTokens + outputTokens + cacheReadTokens + cacheWriteTokens + reasoningTokens }
 
     static func + (a: TokenTotals, b: TokenTotals) -> TokenTotals {
