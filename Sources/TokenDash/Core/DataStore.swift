@@ -7,17 +7,25 @@ final class DataStore: ObservableObject {
     @Published private(set) var isRefreshing: Bool = false
     @Published private(set) var lastRefreshed: Date? = nil
 
-    private let providers: [UsageProvider]
+    private var providers: [UsageProvider]
     private var timer: Timer?
 
     init() {
-        self.providers = [
-            ClaudeCodeProvider(),
-            CodexProvider(),
-            ElevenLabsProvider(),
-            OpenRouterProvider(),
-            GroqProvider(),
-        ]
+        // Always-on built-ins plus any extras the user has added in Settings.
+        self.providers = ProviderRegistry.shared.instantiateAllProviders()
+        Task { await self.refreshAll() }
+    }
+
+    /// Rebuild the active provider list from the registry and refresh.
+    /// Called after the user adds or removes an extra provider in Settings.
+    func reloadProviders() {
+        self.providers = ProviderRegistry.shared.instantiateAllProviders()
+        // Drop stale snapshots for providers that no longer exist so the UI
+        // doesn't keep rendering ghosts of a removed card. `refreshAll` will
+        // repopulate immediately.
+        self.snapshots = self.snapshots.filter { snap in
+            providers.contains { $0.id == snap.id }
+        }
         Task { await self.refreshAll() }
     }
 

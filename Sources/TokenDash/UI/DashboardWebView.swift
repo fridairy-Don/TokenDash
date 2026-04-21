@@ -67,6 +67,36 @@ struct DashboardWebView: NSViewRepresentable {
                 Task { await self.store?.refreshAll() }
                 return
             }
+            // "add-provider:<type>:<key>" — register an extra provider and
+            // immediately spin up its instance.
+            if body.hasPrefix("add-provider:") {
+                let payload = String(body.dropFirst("add-provider:".count))
+                guard let colon = payload.firstIndex(of: ":") else { return }
+                let type = String(payload[..<colon])
+                let key = String(payload[payload.index(after: colon)...])
+                if ProviderRegistry.shared.add(type: type, apiKey: key) {
+                    self.store?.reloadProviders()
+                }
+                return
+            }
+            // "remove-provider:<type>" — drop a user-added provider.
+            if body.hasPrefix("remove-provider:") {
+                let type = String(body.dropFirst("remove-provider:".count))
+                if ProviderRegistry.shared.remove(type: type) {
+                    self.store?.reloadProviders()
+                }
+                return
+            }
+            // "open-url:<https-url>" — open the target in the user's default
+            // browser. Used by the provider picker to jump to docs pages.
+            if body.hasPrefix("open-url:") {
+                let urlStr = String(body.dropFirst("open-url:".count))
+                if let url = URL(string: urlStr),
+                   (url.scheme == "https" || url.scheme == "http") {
+                    NSWorkspace.shared.open(url)
+                }
+                return
+            }
             switch body {
             case "refresh":
                 Task { await self.store?.refreshAll() }

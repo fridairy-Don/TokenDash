@@ -40,12 +40,28 @@ extension DataStore {
 
         // Which API keys are stored — Settings UI uses this to render per-provider
         // rows. We only expose whether the key exists; the key itself never leaves
-        // KeyStore.
-        root["keyStatus"] = [
-            "elevenlabs": KeyStore.hasKey(account: "elevenlabs"),
-            "openrouter": KeyStore.hasKey(account: "openrouter"),
-            "groq":       KeyStore.hasKey(account: "groq"),
-        ]
+        // KeyStore. Covers built-in providers plus any user-added extras.
+        var keyStatus: [String: Bool] = [:]
+        for d in ProviderRegistry.descriptors where d.apiKeyHint != nil {
+            keyStatus[d.type] = KeyStore.hasKey(account: d.type)
+        }
+        root["keyStatus"] = keyStatus
+
+        // All provider descriptors + which extras are currently configured.
+        // Settings UI uses these to render the picker + active-providers list.
+        root["providerCatalog"] = ProviderRegistry.descriptors.map { d -> [String: Any] in
+            var out: [String: Any] = [
+                "type":        d.type,
+                "displayName": d.displayName,
+                "description": d.description,
+                "isBuiltIn":   d.isBuiltIn,
+                "needsKey":    d.apiKeyHint != nil,
+            ]
+            if let hint = d.apiKeyHint { out["keyHint"] = hint }
+            if let url = d.docsURL     { out["docsUrl"] = url }
+            return out
+        }
+        root["configuredExtras"] = ProviderRegistry.shared.configuredExtraTypes
 
         let data = (try? JSONSerialization.data(withJSONObject: root, options: [])) ?? Data()
         return String(data: data, encoding: .utf8) ?? "{}"
@@ -169,7 +185,10 @@ extension DataStore {
         case "elevenlabs": kind = "eleven"
         case "openrouter": kind = "router"
         case "groq":       kind = "groq"
-        default:           kind = "groq"
+        case "moonshot":   kind = "moonshot"
+        case "github":     kind = "github"
+        case "vercel":     kind = "vercel"
+        default:           kind = "generic"
         }
         var out: [String: Any] = [
             "id": s.id,
@@ -192,7 +211,7 @@ extension DataStore {
                 if !nums.isEmpty { out["history7"] = nums }
             case "historyMax":
                 if let n = Double(v) { out["historyMax"] = n }
-            case "topModels", "topProjects", "topVoices", "allModels", "dailySpend":
+            case "topModels", "topProjects", "topVoices", "allModels", "dailySpend", "rateBuckets":
                 if let data = v.data(using: .utf8),
                    let arr = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] {
                     out[k] = arr

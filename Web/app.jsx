@@ -1955,25 +1955,332 @@ function VD2_Groq({ t, d }) {
   );
 }
 
-// `Add provider` was wired to postSwift('add-provider') but there's no Swift
-// handler, so it was a dead button. Dynamic provider registration is a
-// substantial feature (generic HTTP provider + runtime registry +
-// persistence); we'll bring the UI back when the backend exists.
-// Keeping an empty placeholder export so any stale call sites fail loudly.
-function VD2_AddBtn() { return null; }
+// ── Moonshot compact card ───────────────────────────────────────────────────
+function VD2_Moonshot({ t, d }) {
+  if (!d.headline || d.state === 'unconfigured') {
+    return (
+      <VD2_Compact t={t}>
+        <Monogram letter="M" t={t} tone="free" />
+        <div style={{ minWidth: 0, flex: 1 }}>
+          <div style={{ fontSize: 12, fontWeight: 600, color: t.muted, display: 'flex', alignItems: 'center', gap: 6, whiteSpace: 'nowrap' }}>
+            {d.name}<Pill t={t} tone="free">{d.pill}</Pill>
+          </div>
+          <div style={{ fontFamily: TD_FONTS.serif, fontStyle: 'italic', fontSize: 11, color: t.dim, marginTop: 3 }}>
+            {d.note || 'API key not configured'}
+          </div>
+        </div>
+      </VD2_Compact>
+    );
+  }
+  return (
+    <VD2_Compact t={t}>
+      <Monogram letter="M" t={t} tone="free" />
+      <div style={{ minWidth: 0, flex: 1 }}>
+        <div style={{ fontSize: 12, fontWeight: 600, color: t.ink, display: 'flex', alignItems: 'center', gap: 6, whiteSpace: 'nowrap' }}>
+          {d.name}<Pill t={t} tone="free">{d.pill}</Pill>
+        </div>
+        <div style={{
+          fontFamily: TD_FONTS.mono, fontSize: 10.5, color: t.dim, marginTop: 3,
+          fontVariantNumeric: 'tabular-nums',
+        }}>
+          {d.cashLabel && `Cash ${d.cashLabel}`}
+          {d.voucherLabel && ` · Voucher ${d.voucherLabel}`}
+        </div>
+      </div>
+      <div style={{ textAlign: 'right' }}>
+        <div style={{ fontFamily: TD_FONTS.mono, fontSize: 15, color: t.ink, fontVariantNumeric: 'tabular-nums', letterSpacing: -0.3, lineHeight: 1 }}>{d.headline}</div>
+        <div style={{ fontFamily: TD_FONTS.serif, fontStyle: 'italic', fontSize: 10, color: t.dim, marginTop: 4 }}>available</div>
+      </div>
+    </VD2_Compact>
+  );
+}
+
+// ── GitHub compact card + drawer ───────────────────────────────────────────
+function VD2_GitHub({ t, d }) {
+  const [expanded, setExpanded] = React.useState(false);
+  const dark = t.ink === VD2_DARK.ink;
+  const hasDetail = (d.rateBuckets && d.rateBuckets.length > 0) || typeof d.actionsUsed === 'string';
+
+  if (!d.headline || d.state === 'unconfigured') {
+    return (
+      <VD2_Compact t={t}>
+        <Monogram letter="G" t={t} tone="free" />
+        <div style={{ minWidth: 0, flex: 1 }}>
+          <div style={{ fontSize: 12, fontWeight: 600, color: t.muted, display: 'flex', alignItems: 'center', gap: 6, whiteSpace: 'nowrap' }}>
+            {d.name}<Pill t={t} tone="free">{d.pill}</Pill>
+          </div>
+          <div style={{ fontFamily: TD_FONTS.serif, fontStyle: 'italic', fontSize: 11, color: t.dim, marginTop: 3 }}>
+            {d.note || 'API key not configured'}
+          </div>
+        </div>
+      </VD2_Compact>
+    );
+  }
+  return (
+    <div
+      onClick={() => hasDetail && setExpanded(e => !e)}
+      style={{
+        background: t.compactBg,
+        border: `1px solid ${dark ? 'rgba(237,230,214,0.06)' : 'rgba(60,45,30,0.04)'}`,
+        borderRadius: 10, padding: '12px 14px', marginBottom: 8,
+        cursor: hasDetail ? 'pointer' : 'default',
+      }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        <Monogram letter="G" t={t} tone="free" />
+        <div style={{ minWidth: 0 }}>
+          <div style={{ fontSize: 12, fontWeight: 600, color: t.ink, display: 'flex', alignItems: 'center', gap: 6, whiteSpace: 'nowrap' }}>
+            {d.name}<Pill t={t} tone="free">{d.pill}</Pill>
+          </div>
+          <div style={{ fontFamily: TD_FONTS.mono, fontSize: 10.5, color: t.dim, marginTop: 3, whiteSpace: 'nowrap' }}>
+            {d.caption} · resets {d.resetIn}
+          </div>
+        </div>
+        <div style={{ flex: 1 }} />
+        <div style={{ textAlign: 'right' }}>
+          <div style={{ fontFamily: TD_FONTS.mono, fontSize: 15, color: t.ink, fontVariantNumeric: 'tabular-nums', letterSpacing: -0.3, lineHeight: 1 }}>{d.headline}</div>
+          <div style={{ fontFamily: TD_FONTS.serif, fontStyle: 'italic', fontSize: 10, color: t.dim, marginTop: 4 }}>remaining</div>
+        </div>
+      </div>
+
+      {expanded && <VD2_GitHubDrawer t={t} d={d} />}
+    </div>
+  );
+}
+
+function VD2_GitHubDrawer({ t, d }) {
+  const buckets = d.rateBuckets || [];
+  const fmtInt = (n) => n == null ? '—' : Number(n).toLocaleString();
+  const fmtETA = (unix) => {
+    const s = Math.max(0, Math.round(unix - Date.now() / 1000));
+    if (s < 60) return `${s}s`;
+    if (s < 3600) return `${Math.floor(s / 60)}m`;
+    return `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m`;
+  };
+  return (
+    <div
+      onClick={(e) => e.stopPropagation()}
+      style={{ marginTop: 12, paddingTop: 10, borderTop: `1px solid ${t.hair}` }}>
+
+      {/* Rate limit buckets */}
+      {buckets.length > 0 && (
+        <div style={{ marginBottom: 10 }}>
+          <div style={{
+            fontFamily: TD_FONTS.serif, fontStyle: 'italic', fontSize: 11.5, color: t.ink,
+            marginBottom: 6,
+          }}>Rate limit buckets</div>
+          {buckets.map((b, i) => {
+            const pct = b.limit > 0 ? (b.limit - b.remaining) / b.limit * 100 : 0;
+            const dark = t.ink === VD2_DARK.ink;
+            const barColor = pct >= 90 ? (dark ? '#D07565' : '#B44A3A')
+                           : pct >= 70 ? (dark ? '#E5A873' : '#B46B2F')
+                           : (dark ? TD.dGreen : '#6B8E5A');
+            return (
+              <div key={i} style={{ marginBottom: 6 }}>
+                <div style={{
+                  display: 'grid', gridTemplateColumns: '80px 1fr auto',
+                  columnGap: 8, alignItems: 'center',
+                  fontSize: 11, padding: '2px 0',
+                }}>
+                  <span style={{ color: t.ink, fontFamily: TD_FONTS.serif, fontStyle: 'italic' }}>{b.name}</span>
+                  <div style={{ height: 5, background: t.hair, borderRadius: 2, overflow: 'hidden' }}>
+                    <div style={{
+                      height: '100%', width: `${Math.min(100, pct)}%`,
+                      background: barColor, borderRadius: 2,
+                    }} />
+                  </div>
+                  <span style={{
+                    fontFamily: TD_FONTS.mono, color: t.muted,
+                    fontVariantNumeric: 'tabular-nums', fontSize: 10,
+                  }}>{fmtInt(b.remaining)} / {fmtInt(b.limit)} · {fmtETA(b.reset)}</span>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Actions minutes */}
+      {typeof d.actionsUsed === 'string' && (
+        <div style={{
+          paddingTop: 10, borderTop: `1px solid ${t.hair}`,
+          fontFamily: TD_FONTS.serif, fontStyle: 'italic',
+          fontSize: 11, color: t.dim, lineHeight: 1.5,
+        }}>
+          <span style={{ color: t.ink }}>Actions: {d.actionsUsed}</span> minutes used
+          {d.actionsIncluded && ` of ${d.actionsIncluded} included`}
+          {typeof d.actionsPct === 'number' && ` (${d.actionsPct}%)`}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Vercel compact card + drawer ───────────────────────────────────────────
+function VD2_Vercel({ t, d }) {
+  const [expanded, setExpanded] = React.useState(false);
+  const dark = t.ink === VD2_DARK.ink;
+  const hasDetail = (d.hourBucketsReqs && d.hourBucketsReqs.length > 0)
+                 || (d.topProjects && d.topProjects.length > 0);
+
+  if (!d.headline || d.state === 'unconfigured') {
+    return (
+      <VD2_Compact t={t}>
+        <Monogram letter="V" t={t} tone="free" />
+        <div style={{ minWidth: 0, flex: 1 }}>
+          <div style={{ fontSize: 12, fontWeight: 600, color: t.muted, display: 'flex', alignItems: 'center', gap: 6, whiteSpace: 'nowrap' }}>
+            {d.name}<Pill t={t} tone="free">{d.pill}</Pill>
+          </div>
+          <div style={{ fontFamily: TD_FONTS.serif, fontStyle: 'italic', fontSize: 11, color: t.dim, marginTop: 3 }}>
+            {d.note || 'API key not configured'}
+          </div>
+        </div>
+      </VD2_Compact>
+    );
+  }
+  return (
+    <div
+      onClick={() => hasDetail && setExpanded(e => !e)}
+      style={{
+        background: t.compactBg,
+        border: `1px solid ${dark ? 'rgba(237,230,214,0.06)' : 'rgba(60,45,30,0.04)'}`,
+        borderRadius: 10, padding: '12px 14px', marginBottom: 8,
+        cursor: hasDetail ? 'pointer' : 'default',
+      }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        <Monogram letter="V" t={t} tone="free" />
+        <div style={{ minWidth: 0 }}>
+          <div style={{ fontSize: 12, fontWeight: 600, color: t.ink, display: 'flex', alignItems: 'center', gap: 6, whiteSpace: 'nowrap' }}>
+            {d.name}<Pill t={t} tone="free">{d.pill}</Pill>
+          </div>
+          <div style={{ fontFamily: TD_FONTS.mono, fontSize: 10.5, color: t.dim, marginTop: 3, whiteSpace: 'nowrap' }}>
+            {d.note}
+          </div>
+        </div>
+        <div style={{ flex: 1 }} />
+        <div style={{ textAlign: 'right' }}>
+          <div style={{ fontFamily: TD_FONTS.mono, fontSize: 15, color: t.ink, fontVariantNumeric: 'tabular-nums', letterSpacing: -0.3, lineHeight: 1 }}>{d.headline}</div>
+          <div style={{ fontFamily: TD_FONTS.serif, fontStyle: 'italic', fontSize: 10, color: t.dim, marginTop: 4 }}>24h</div>
+        </div>
+      </div>
+
+      {expanded && <VD2_VercelDrawer t={t} d={d} />}
+    </div>
+  );
+}
+
+function VD2_VercelDrawer({ t, d }) {
+  const dark = t.ink === VD2_DARK.ink;
+  const color = dark ? TD.dCoral : TD.coral;
+  const buckets = d.hourBucketsReqs || [];
+  const topProjects = d.topProjects || [];
+  const fmtHour = (h) => {
+    h = ((h % 24) + 24) % 24;
+    if (h === 0) return '12 AM'; if (h === 12) return '12 PM';
+    return h < 12 ? `${h} AM` : `${h - 12} PM`;
+  };
+  const hourBars = buckets.map((n) => ({ value: n, color }));
+  const hourTooltip = (i) => {
+    const n = buckets[i] || 0;
+    return `${fmtHour(i)} · ${n} deploy${n === 1 ? '' : 's'}`;
+  };
+
+  return (
+    <div
+      onClick={(e) => e.stopPropagation()}
+      style={{ marginTop: 12, paddingTop: 10, borderTop: `1px solid ${t.hair}` }}>
+
+      {/* Tile row */}
+      <div style={{
+        display: 'grid', gridTemplateColumns: '1fr 1fr 1fr',
+        gap: 8, marginBottom: 10,
+      }}>
+        {[
+          { k: 'Projects',    v: d.projectCount || '0' },
+          { k: 'Deploys 24h', v: d.deployments24h || '0' },
+          { k: 'Failed 24h',  v: d.failed24h || '0' },
+        ].map((x, i) => (
+          <div key={i} style={{
+            background: t.compactBg, border: `1px solid ${t.hair}`,
+            borderRadius: 6, padding: '6px 8px',
+          }}>
+            <div style={{
+              fontFamily: TD_FONTS.serif, fontStyle: 'italic',
+              fontSize: 9.5, color: t.dim, marginBottom: 2,
+            }}>{x.k}</div>
+            <div style={{
+              fontFamily: TD_FONTS.mono, fontSize: 13, color: t.ink,
+              fontVariantNumeric: 'tabular-nums',
+            }}>{x.v}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* 24-hour deploy pattern */}
+      {buckets.length === 24 && (
+        <div style={{ marginBottom: 12 }}>
+          <div style={{
+            fontFamily: TD_FONTS.serif, fontStyle: 'italic', fontSize: 11.5, color: t.ink,
+            marginBottom: 2,
+          }}>Deploys by hour (last 24h)</div>
+          <div style={{
+            fontFamily: TD_FONTS.serif, fontStyle: 'italic', fontSize: 10, color: t.dim,
+            marginBottom: 8,
+          }}>hover a bar for exact count · spikes may signal a build loop</div>
+          <HoverBarChart
+            t={t}
+            bars={hourBars}
+            heightPx={38}
+            gap={2}
+            tooltipLabel={hourTooltip}
+          />
+        </div>
+      )}
+
+      {/* Top projects by deploy count */}
+      {topProjects.length > 0 && (
+        <div>
+          <div style={{
+            fontFamily: TD_FONTS.serif, fontStyle: 'italic', fontSize: 11.5, color: t.ink,
+            marginBottom: 6,
+          }}>Most-deployed projects (24h)</div>
+          {topProjects.map((p, i) => (
+            <div key={i} style={{
+              display: 'grid', gridTemplateColumns: '1fr auto',
+              columnGap: 8, padding: '4px 0',
+              borderBottom: i < topProjects.length - 1 ? `1px solid ${t.hair}` : 'none',
+              fontSize: 11,
+            }}>
+              <span style={{
+                color: t.ink, fontFamily: TD_FONTS.serif, fontStyle: 'italic',
+                whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+              }}>{p.name}</span>
+              <span style={{
+                fontFamily: TD_FONTS.mono, color: t.ink, fontWeight: 500,
+                fontVariantNumeric: 'tabular-nums',
+              }}>{p.count} deploy{p.count === 1 ? '' : 's'}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
 
 function VD2_CompactRouter({ t, p }) {
   switch (p.kind) {
-    case 'eleven': return <VD2_Eleven t={t} d={p} />;
-    case 'router': return <VD2_Router t={t} d={p} />;
-    case 'groq':   return <VD2_Groq t={t} d={p} />;
-    default:       return <VD2_Groq t={t} d={p} />;
+    case 'eleven':   return <VD2_Eleven t={t} d={p} />;
+    case 'router':   return <VD2_Router t={t} d={p} />;
+    case 'groq':     return <VD2_Groq t={t} d={p} />;
+    case 'moonshot': return <VD2_Moonshot t={t} d={p} />;
+    case 'github':   return <VD2_GitHub t={t} d={p} />;
+    case 'vercel':   return <VD2_Vercel t={t} d={p} />;
+    default:         return <VD2_Groq t={t} d={p} />;
   }
 }
 
 // ─── API key row ─────────────────────────────────────────────────────────────
 
-function KeyRow({ t, label, account, hasKey }) {
+function KeyRow({ t, label, account, hasKey, hint, docsUrl, removable }) {
   const [val, setVal] = React.useState('');
   const [saved, setSaved] = React.useState(false);
 
@@ -1991,6 +2298,11 @@ function KeyRow({ t, label, account, hasKey }) {
     setVal('');
   };
 
+  const remove = () => {
+    // User-added extra: pull the provider entirely (drops key + card).
+    postSwift('remove-provider:' + account);
+  };
+
   return (
     <div style={{ marginTop: 10 }}>
       <div style={{
@@ -2005,6 +2317,21 @@ function KeyRow({ t, label, account, hasKey }) {
             padding: '1px 7px', borderRadius: 8,
           }}>stored</span>
         )}
+        {removable && (
+          <button
+            onClick={remove}
+            title="Remove this provider entirely"
+            style={{
+              border: 'none', background: 'transparent',
+              cursor: 'pointer', color: t.dim,
+              fontFamily: TD_FONTS.sans, fontSize: 10.5,
+              padding: '1px 6px', borderRadius: 4,
+            }}
+            onMouseEnter={(e) => e.currentTarget.style.color = t.red || '#B44A3A'}
+            onMouseLeave={(e) => e.currentTarget.style.color = t.dim}>
+            Remove
+          </button>
+        )}
       </div>
       <div style={{ display: 'flex', gap: 6 }}>
         <input
@@ -2012,7 +2339,7 @@ function KeyRow({ t, label, account, hasKey }) {
           value={val}
           onChange={e => setVal(e.target.value)}
           onKeyDown={e => e.key === 'Enter' && save()}
-          placeholder={hasKey ? '••••••  (paste to replace)' : 'Paste API key…'}
+          placeholder={hasKey ? '••••••  (paste to replace)' : (hint || 'Paste API key…')}
           style={{
             flex: 1, fontFamily: TD_FONTS.mono, fontSize: 11,
             padding: '7px 9px', borderRadius: 7,
@@ -2044,6 +2371,167 @@ function KeyRow({ t, label, account, hasKey }) {
   );
 }
 
+// ─── Provider picker modal ───────────────────────────────────────────────────
+//
+// Two-step flow: (1) pick a provider type from the list, (2) paste its API
+// key, hit Enter / Add. Dismisses on escape, outside-click, or success.
+function ProviderPicker({ t, options, onClose }) {
+  const [selected, setSelected] = React.useState(null);
+  const [key, setKey] = React.useState('');
+  const inputRef = React.useRef(null);
+  const dark = t.ink === VD2_DARK.ink;
+
+  React.useEffect(() => {
+    if (selected && inputRef.current) inputRef.current.focus();
+  }, [selected]);
+
+  React.useEffect(() => {
+    const onKey = (e) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
+  const submit = () => {
+    const trimmed = key.trim();
+    if (!selected || !trimmed) return;
+    postSwift('add-provider:' + selected.type + ':' + trimmed);
+    onClose();
+  };
+
+  return (
+    <div
+      onClick={onClose}
+      style={{
+        position: 'fixed', inset: 0,
+        background: dark ? 'rgba(0,0,0,0.55)' : 'rgba(26,25,21,0.35)',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        padding: 16, zIndex: 1000,
+      }}>
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          width: '100%', maxWidth: 360,
+          background: t.surface,
+          border: `1px solid ${t.border}`,
+          borderRadius: 12, padding: 16,
+          boxShadow: '0 8px 40px rgba(0,0,0,0.25)',
+        }}>
+
+        {selected == null ? (
+          // Step 1: pick a type
+          <>
+            <div style={{
+              fontFamily: TD_FONTS.serif, fontStyle: 'italic', fontSize: 14, color: t.ink,
+              marginBottom: 2,
+            }}>Add a provider</div>
+            <div style={{
+              fontFamily: TD_FONTS.serif, fontStyle: 'italic', fontSize: 11, color: t.dim,
+              marginBottom: 12,
+            }}>Pick one to configure. Key stays local.</div>
+            <div style={{ maxHeight: 300, overflowY: 'auto', margin: '0 -4px' }}>
+              {options.map(p => (
+                <button
+                  key={p.type}
+                  onClick={() => setSelected(p)}
+                  style={{
+                    display: 'block', width: '100%',
+                    background: 'transparent', border: 'none',
+                    textAlign: 'left',
+                    padding: '8px 10px', marginBottom: 2,
+                    borderRadius: 7,
+                    cursor: 'pointer',
+                    transition: 'background 120ms',
+                  }}
+                  onMouseEnter={(e) => e.currentTarget.style.background = t.compactBg}
+                  onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}>
+                  <div style={{
+                    fontFamily: TD_FONTS.sans, fontSize: 12.5, fontWeight: 600, color: t.ink,
+                  }}>{p.displayName}</div>
+                  <div style={{
+                    fontFamily: TD_FONTS.serif, fontStyle: 'italic', fontSize: 11, color: t.dim,
+                    marginTop: 1, lineHeight: 1.4,
+                  }}>{p.description}</div>
+                </button>
+              ))}
+            </div>
+            <button
+              onClick={onClose}
+              style={{
+                marginTop: 10, width: '100%',
+                background: 'transparent', border: `1px solid ${t.border}`,
+                borderRadius: 7, padding: '6px',
+                cursor: 'pointer', color: t.muted,
+                fontFamily: TD_FONTS.sans, fontSize: 12,
+              }}>Cancel</button>
+          </>
+        ) : (
+          // Step 2: paste API key
+          <>
+            <div style={{
+              fontFamily: TD_FONTS.serif, fontStyle: 'italic', fontSize: 14, color: t.ink,
+              marginBottom: 2,
+            }}>{selected.displayName}</div>
+            <div style={{
+              fontFamily: TD_FONTS.serif, fontStyle: 'italic', fontSize: 11, color: t.dim,
+              marginBottom: 10, lineHeight: 1.4,
+            }}>
+              {selected.description}
+              {selected.docsUrl && (
+                <>
+                  {' · '}
+                  <a
+                    href={selected.docsUrl}
+                    onClick={(e) => { e.preventDefault(); postSwift('open-url:' + selected.docsUrl); }}
+                    style={{ color: t.coral, textDecoration: 'none' }}
+                  >Get a key →</a>
+                </>
+              )}
+            </div>
+            <input
+              ref={inputRef}
+              type="password"
+              value={key}
+              onChange={(e) => setKey(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') submit(); }}
+              placeholder={selected.keyHint || 'Paste API key…'}
+              style={{
+                width: '100%', boxSizing: 'border-box',
+                fontFamily: TD_FONTS.mono, fontSize: 11,
+                padding: '8px 10px', borderRadius: 7,
+                border: `1px solid ${t.border}`,
+                background: dark ? t.surfaceAlt : t.compactBg,
+                color: t.ink, outline: 'none',
+              }}
+            />
+            <div style={{ display: 'flex', gap: 6, marginTop: 10 }}>
+              <button
+                onClick={() => setSelected(null)}
+                style={{
+                  flex: '0 0 auto', padding: '7px 12px',
+                  borderRadius: 7, border: `1px solid ${t.border}`,
+                  background: 'transparent', color: t.muted,
+                  fontFamily: TD_FONTS.sans, fontSize: 12,
+                  cursor: 'pointer',
+                }}>Back</button>
+              <button
+                onClick={submit}
+                disabled={!key.trim()}
+                style={{
+                  flex: 1, padding: '7px 12px',
+                  borderRadius: 7, border: 'none',
+                  background: key.trim() ? t.coral : t.compactBg,
+                  color: key.trim() ? '#fff' : t.dim,
+                  fontFamily: TD_FONTS.sans, fontSize: 12, fontWeight: 600,
+                  cursor: key.trim() ? 'pointer' : 'default',
+                }}>Add</button>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ─── Settings overlay ────────────────────────────────────────────────────────
 
 function VD2_Settings({ t, theme, setTheme, onResetOrder, orderDirty }) {
@@ -2054,6 +2542,23 @@ function VD2_Settings({ t, theme, setTheme, onResetOrder, orderDirty }) {
     { id: 'auto',  label: 'Auto'  },
   ];
   const ks = (window.TD_DATA && window.TD_DATA.keyStatus) || {};
+  const catalog = (window.TD_DATA && window.TD_DATA.providerCatalog) || [];
+  const configuredExtras = (window.TD_DATA && window.TD_DATA.configuredExtras) || [];
+
+  // Active = built-ins that need keys + any user-added extras (whether key
+  // is stored yet or not). Built-ins without keys are always visible because
+  // the user can configure them inline; extras only appear after being added
+  // via the picker.
+  const activeProviders = catalog.filter(p => {
+    if (p.isBuiltIn && p.needsKey) return true;
+    if (!p.isBuiltIn && configuredExtras.includes(p.type)) return true;
+    return false;
+  });
+  const addableProviders = catalog.filter(p =>
+    !p.isBuiltIn && !configuredExtras.includes(p.type)
+  );
+
+  const [pickerOpen, setPickerOpen] = React.useState(false);
 
   return (
     <div style={{ padding: '4px 2px 0' }}>
@@ -2061,11 +2566,51 @@ function VD2_Settings({ t, theme, setTheme, onResetOrder, orderDirty }) {
         <SectionLabel t={t}>API Keys</SectionLabel>
         <div style={{
           marginTop: 6, fontFamily: TD_FONTS.sans, fontSize: 11, color: t.dim, lineHeight: 1.5,
-        }}>Keys are stored locally in <code style={{ fontFamily: TD_FONTS.mono, fontSize: 10 }}>~/Library/Application Support/TokenDash/keys.plist</code> (0600, owner-only). Nothing leaves your Mac.</div>
-        <KeyRow t={t} label="ElevenLabs" account="elevenlabs" hasKey={!!ks.elevenlabs} />
-        <KeyRow t={t} label="OpenRouter" account="openrouter" hasKey={!!ks.openrouter} />
-        <KeyRow t={t} label="Groq" account="groq" hasKey={!!ks.groq} />
+        }}>Keys live in <code style={{ fontFamily: TD_FONTS.mono, fontSize: 10 }}>~/Library/Application Support/TokenDash/keys.plist</code> (0600, owner-only). Nothing leaves your Mac.</div>
+
+        {activeProviders.map(p => (
+          <KeyRow
+            key={p.type}
+            t={t}
+            label={p.displayName}
+            account={p.type}
+            hasKey={!!ks[p.type]}
+            hint={p.keyHint}
+            docsUrl={p.docsUrl}
+            removable={!p.isBuiltIn}
+          />
+        ))}
+
+        {addableProviders.length > 0 && (
+          <button
+            onClick={() => setPickerOpen(true)}
+            style={{
+              width: '100%', marginTop: 12,
+              background: 'transparent',
+              border: `1px dashed ${t.border}`,
+              borderRadius: 10, padding: '10px',
+              color: t.muted, fontFamily: TD_FONTS.sans, fontSize: 12, fontWeight: 500,
+              cursor: 'pointer', display: 'flex', alignItems: 'center',
+              justifyContent: 'center', gap: 6,
+              transition: 'all 120ms',
+            }}
+            onMouseEnter={(e) => { e.currentTarget.style.background = t.surfaceAlt; e.currentTarget.style.color = t.ink; }}
+            onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = t.muted; }}>
+            <svg width="11" height="11" viewBox="0 0 12 12" fill="none">
+              <path d="M6 2v8M2 6h8" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/>
+            </svg>
+            <span>Add provider ({addableProviders.length} available)</span>
+          </button>
+        )}
       </SectionCard>
+
+      {pickerOpen && (
+        <ProviderPicker
+          t={t}
+          options={addableProviders}
+          onClose={() => setPickerOpen(false)}
+        />
+      )}
 
       <SectionCard t={t}>
         <SectionLabel t={t}>Appearance</SectionLabel>
