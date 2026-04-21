@@ -1389,7 +1389,18 @@ function VD2_ElevenDrawer({ t, d }) {
 function VD2_Router({ t, d }) {
   const [expanded, setExpanded] = React.useState(false);
   const dark = t.ink === VD2_DARK.ink;
-  const hasDetail = (d.history7 && d.history7.length > 0) || (d.topModels && d.topModels.length > 0);
+  // Expand whenever *anything* useful lives in the drawer. /v1/activity can
+  // 404 on accounts without the extra OAuth scope — in that case topModels /
+  // allModels come back empty but spend/reqs totals may still be present
+  // (we store "$0.00" / 0 as defaults, so check for non-empty totals).
+  const hasAnyModels   = (d.topModels && d.topModels.length > 0)
+                       || (d.allModels && d.allModels.length > 0);
+  const hasHistory     = d.history7 && d.history7.length > 0;
+  const hasActivitySum = (typeof d.reqs7d === 'number' && d.reqs7d > 0)
+                       || (typeof d.reqsToday === 'number' && d.reqsToday > 0)
+                       || (d.spend7d && d.spend7d !== '$0.00')
+                       || (d.burnPerDay && d.burnPerDay !== '$0.00');
+  const hasDetail = hasAnyModels || hasHistory || hasActivitySum;
   const coral = dark ? TD.dCoral : TD.coral;
 
   if (!d.credits) {
