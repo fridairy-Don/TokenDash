@@ -62,31 +62,27 @@ final class MoonshotProvider: UsageProvider {
                 spend < warnAt   ? 80 :
                 0
 
-            // --- Derived "spent today" from PersistentStore history --------
-            // Moonshot doesn't hand us a per-day usage feed, so reconstruct
-            // it from balance deltas: yesterday-end minus today-current, if
-            // positive. Across a whole week, the PersistentStore daily table
-            // has one row per day with credits_usd = balance at that point,
-            // which is good enough.
+            // --- Derived spend metrics from PersistentStore balance history ---
+            // Moonshot doesn't expose per-day usage, so everything is
+            // reconstructed from balance deltas stored locally:
+            //   spent today   = yesterday-end balance − today's balance
+            //   avg $/day     = mean of non-zero daily deltas over 7 days
+            //   days left     = current balance ÷ avg $/day
             let spendToday = await computeSpendToday(currentBalance: spend)
-            let spendTodayLabel = spendToday > 0
-                ? formatMoney(spendToday, currency: cur)
-                : formatMoney(0, currency: cur)
+            let spendTodayLabel = formatMoney(max(0, spendToday), currency: cur)
 
-            // --- Model list for the drawer --------------------------------
-            // Group by context window parsed from the id suffix (e.g.
-            // "moonshot-v1-32k" → 32k). Newer Kimi models encode the
-            // context length the same way.
-            let modelPayload: [[String: Any]] = models
-                .sorted { Self.contextLengthBucket($0.id) < Self.contextLengthBucket($1.id) }
-                .map { m -> [String: Any] in
-                    [
-                        "id":     m.id,
-                        "name":   Self.prettyModelName(m.id),
-                        "ctxK":   Self.contextLengthBucket(m.id),
-                        "owner":  m.owned_by ?? "moonshot",
-                    ]
-                }
+            let history = PersistentStore.shared.dailyBalanceSpend(provider: id, days: 7)
+            let nonZero = history.filter { $0 > 0 }
+            let avgPerDay = nonZero.isEmpty ? 0 : nonZero.reduce(0, +) / Double(nonZero.count)
+            let avgPerDayLabel = formatMoney(avgPerDay, currency: cur)
+            let daysLeft: Int? = avgPerDay > 0.001
+                ? Int((spend / avgPerDay).rounded(.down))
+                : nil
+
+            // Model list: only the ids; the drawer renders them as a
+            // collapsible footer, not the main content. Agent operators
+            // usually care about cost, not model catalog.
+            let modelIds = models.map { $0.id }
 
             var extras: [String: String] = [
                 "region":          host.region,
@@ -96,25 +92,31 @@ final class MoonshotProvider: UsageProvider {
                 "cashLabel":       cashFmt,
                 "voucherLabel":    vchFmt,
                 "spentTodayLabel": spendTodayLabel,
-                "spentTodayNum":   String(format: "%.4f", spendToday),
+                "spentTodayNum":   String(format: "%.4f", max(0, spendToday)),
+                "avgPerDayLabel":  avgPerDayLabel,
+                "avgPerDayNum":    String(format: "%.4f", avgPerDay),
                 "modelsCount":     "\(models.count)",
                 "headline":        headline,
-                // Fed to PersistentStore so we build up a balance-history
-                // series that `computeSpendToday` can consume next refresh.
+                // Fed to PersistentStore so the daily table accumulates the
+                // balance series that everything above reads from.
                 "creditsUsd":      String(balance.available_balance),
             ]
             if pctUsed > 0 { extras["pct"] = "\(pctUsed)" }
-            if !modelPayload.isEmpty,
-               let data = try? JSONSerialization.data(withJSONObject: modelPayload),
+            if let daysLeft = daysLeft {
+                extras["daysLeft"] = "\(daysLeft)"
+            }
+            if !modelIds.isEmpty,
+               let data = try? JSONSerialization.data(withJSONObject: modelIds),
                let s = String(data: data, encoding: .utf8) {
-                extras["models"] = s
+                extras["modelIds"] = s
             }
 
+            // Subtitle note — kept short; busy drawer handles the details.
             let note: String
-            if models.isEmpty {
-                note = "Cash \(cashFmt) · Voucher \(vchFmt)"
+            if let daysLeft = daysLeft {
+                note = "\(avgPerDayLabel)/day · ~\(daysLeft > 365 ? "365+" : "\(daysLeft)")d left"
             } else {
-                note = "Cash \(cashFmt) · \(models.count) models"
+                note = "Cash \(cashFmt)"
             }
 
             return ProviderSnapshot(

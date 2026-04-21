@@ -216,6 +216,12 @@ extension DataStore {
                    let arr = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] {
                     out[k] = arr
                 }
+            case "modelIds":
+                // Plain array of strings (not object rows).
+                if let data = v.data(using: .utf8),
+                   let arr = try? JSONSerialization.jsonObject(with: data) as? [String] {
+                    out[k] = arr
+                }
             case "hourBucketsReqs", "hourBucketsChars":
                 let nums = v.split(separator: ",").compactMap { Int($0) }
                 if !nums.isEmpty { out[k] = nums }

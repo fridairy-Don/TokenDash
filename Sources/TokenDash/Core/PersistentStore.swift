@@ -253,6 +253,22 @@ final class PersistentStore {
         return out
     }
 
+    /// Per-day spend inferred from balance drops. For providers that only
+    /// expose a running credit balance (Moonshot), this is the closest thing
+    /// to "what did I spend each day": take balance drops day-to-day, clamp
+    /// top-ups (balance went up) to zero, and return the series.
+    func dailyBalanceSpend(provider: String, days: Int = 7) -> [Double] {
+        let credits = history(provider: provider, metric: .credits, days: days + 1)
+        var out = [Double](repeating: 0, count: days)
+        for i in 0..<days {
+            let yday  = credits[i]
+            let today = credits[i + 1]
+            if yday <= 0 || today <= 0 { out[i] = 0 }
+            else { out[i] = max(0, yday - today) }   // drop = spend
+        }
+        return out
+    }
+
     // MARK: - Helpers
 
     enum Metric {

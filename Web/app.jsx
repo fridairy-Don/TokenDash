@@ -1959,7 +1959,7 @@ function VD2_Groq({ t, d }) {
 function VD2_Moonshot({ t, d }) {
   const [expanded, setExpanded] = React.useState(false);
   const dark = t.ink === VD2_DARK.ink;
-  const hasDetail = (d.models && d.models.length > 0) || d.spentTodayLabel;
+  const hasDetail = (d.modelIds && d.modelIds.length > 0) || d.spentTodayLabel;
 
   if (!d.headline || d.state === 'unconfigured') {
     return (
@@ -1994,11 +1994,7 @@ function VD2_Moonshot({ t, d }) {
           <div style={{
             fontFamily: TD_FONTS.mono, fontSize: 10.5, color: t.dim, marginTop: 3,
             fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap',
-          }}>
-            {d.cashLabel && `Cash ${d.cashLabel}`}
-            {d.voucherLabel && ` · Voucher ${d.voucherLabel}`}
-            {typeof d.modelsCount === 'string' && d.modelsCount !== '0' && ` · ${d.modelsCount} models`}
-          </div>
+          }}>{d.note}</div>
         </div>
         <div style={{ flex: 1 }} />
         <div style={{ textAlign: 'right' }}>
@@ -2013,38 +2009,62 @@ function VD2_Moonshot({ t, d }) {
 }
 
 function VD2_MoonshotDrawer({ t, d }) {
+  const [modelsOpen, setModelsOpen] = React.useState(false);
   const dark = t.ink === VD2_DARK.ink;
-  const models = d.models || [];
-  // Group models by context-length bucket so the drawer doesn't become a
-  // wall of ids when the platform has 8-10 variants. "8k" models on one
-  // line, "32k" on another, etc.
-  const groups = {};
-  models.forEach(m => {
-    const k = m.ctxK > 0 ? `${m.ctxK}k context` : 'other';
-    if (!groups[k]) groups[k] = [];
-    groups[k].push(m);
-  });
-  const groupOrder = Object.keys(groups).sort((a, b) => {
-    const na = parseInt(a, 10) || 0;
-    const nb = parseInt(b, 10) || 0;
-    return na - nb;
-  });
+  const modelIds = d.modelIds || [];
+  const history7 = d.history7 || [];
+  const currency = d.currency || '$';
+  const fmtMoney = (n) => {
+    const v = n || 0;
+    return `${currency}${v.toFixed(2)}`;
+  };
+
+  // 7-day spend chart. Same primitive as OpenRouter's so the two feel
+  // consistent when you tab between drawers.
+  const bars = history7.map(v => ({ value: v }));
+  const dayLabels = [];
+  for (let i = 6; i >= 0; i--) {
+    const d = new Date();
+    d.setDate(d.getDate() - i);
+    dayLabels.push(String(d.getDate()));
+  }
+  const tip = (i) => {
+    const v = history7[i] || 0;
+    const d = new Date();
+    d.setDate(d.getDate() - (6 - i));
+    const label = d.toLocaleDateString('en', { month: 'short', day: 'numeric' });
+    return `${label} · ${fmtMoney(v)}`;
+  };
+  const hasSpendHistory = bars.some(b => b.value > 0);
 
   return (
     <div
       onClick={(e) => e.stopPropagation()}
       style={{ marginTop: 12, paddingTop: 10, borderTop: `1px solid ${t.hair}` }}>
 
-      {/* Tile row */}
+      {/* Three tiles — the things an agent operator actually checks */}
       <div style={{
         display: 'grid', gridTemplateColumns: '1fr 1fr 1fr',
         gap: 8, marginBottom: 10,
       }}>
         {[
-          { k: 'Spent today', v: d.spentTodayLabel || (d.currency === '$' ? '$0.00' : '¥0.00'),
-            hint: 'from balance delta' },
-          { k: 'Cash',    v: d.cashLabel    || '—', hint: 'paid top-ups' },
-          { k: 'Voucher', v: d.voucherLabel || '—', hint: 'promo credits' },
+          {
+            k: 'Spent today',
+            v: d.spentTodayLabel || `${currency}0.00`,
+            hint: 'derived from balance',
+          },
+          {
+            k: 'Avg / day',
+            v: d.avgPerDayLabel || `${currency}0.00`,
+            hint: '7-day average',
+          },
+          {
+            k: 'Days left',
+            v: typeof d.daysLeft === 'number'
+                 ? (d.daysLeft > 365 ? '365+' : String(d.daysLeft))
+                 : '—',
+            hint: 'at current pace',
+          },
         ].map((x, i) => (
           <div key={i} style={{
             background: t.compactBg, border: `1px solid ${t.hair}`,
@@ -2062,43 +2082,82 @@ function VD2_MoonshotDrawer({ t, d }) {
             <div style={{
               fontFamily: TD_FONTS.serif, fontStyle: 'italic',
               fontSize: 9, color: t.dim, marginTop: 2,
+              whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
             }}>{x.hint}</div>
           </div>
         ))}
       </div>
 
-      {/* Models accessible to this key */}
-      {models.length > 0 && (
-        <div>
+      {/* 7-day spend trend */}
+      {hasSpendHistory ? (
+        <div style={{ marginBottom: 12 }}>
           <div style={{
             fontFamily: TD_FONTS.serif, fontStyle: 'italic', fontSize: 11.5, color: t.ink,
             marginBottom: 2,
-          }}>Available models ({models.length})</div>
+          }}>Daily spend · last 7 days</div>
           <div style={{
             fontFamily: TD_FONTS.serif, fontStyle: 'italic', fontSize: 10, color: t.dim,
             marginBottom: 8,
-          }}>what your key can call · grouped by context window</div>
+          }}>hover for exact amount</div>
+          <HoverBarChart
+            t={t}
+            bars={bars.map(b => ({ ...b, color: dark ? TD.dCoral : TD.coral }))}
+            heightPx={42}
+            gap={4}
+            tooltipLabel={tip}
+            axisLabels={dayLabels}
+          />
+        </div>
+      ) : (
+        // First-day install — we need ≥ 24h of balance snapshots before
+        // the chart is meaningful. Say so instead of rendering flatlined bars.
+        <div style={{
+          marginBottom: 12, padding: '10px',
+          background: t.compactBg, border: `1px solid ${t.hair}`,
+          borderRadius: 6,
+          fontFamily: TD_FONTS.serif, fontStyle: 'italic',
+          fontSize: 11, color: t.dim, textAlign: 'center', lineHeight: 1.5,
+        }}>
+          Spend chart builds up as we record balance over the coming days.
+        </div>
+      )}
 
-          {groupOrder.map((gkey) => (
-            <div key={gkey} style={{ marginBottom: 8 }}>
-              <div style={{
-                fontFamily: TD_FONTS.serif, fontStyle: 'italic',
-                fontSize: 10, color: t.dim, marginBottom: 4,
-                textTransform: 'uppercase', letterSpacing: 0.5,
-              }}>{gkey}</div>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
-                {groups[gkey].map((m, i) => (
-                  <span key={i} title={m.id} style={{
-                    fontFamily: TD_FONTS.mono, fontSize: 10,
-                    color: t.ink, background: dark ? 'rgba(237,230,214,0.06)' : 'rgba(60,45,30,0.06)',
-                    padding: '2px 7px', borderRadius: 10,
-                    border: `1px solid ${t.hair}`,
-                    whiteSpace: 'nowrap',
-                  }}>{m.id}</span>
-                ))}
-              </div>
+      {/* Models — collapsed by default, single-line summary → expand on tap */}
+      {modelIds.length > 0 && (
+        <div style={{ paddingTop: 8, borderTop: `1px solid ${t.hair}` }}>
+          <button
+            onClick={(e) => { e.stopPropagation(); setModelsOpen(v => !v); }}
+            style={{
+              appearance: 'none', border: 'none', background: 'transparent',
+              padding: 0, cursor: 'pointer', width: '100%', textAlign: 'left',
+              display: 'flex', alignItems: 'center', gap: 6,
+              fontFamily: TD_FONTS.serif, fontStyle: 'italic',
+              fontSize: 11, color: t.dim,
+            }}>
+            <span style={{
+              display: 'inline-block',
+              transform: modelsOpen ? 'rotate(90deg)' : 'rotate(0deg)',
+              transition: 'transform 150ms ease',
+              fontSize: 9, color: t.dim,
+            }}>▸</span>
+            <span>{modelIds.length} models accessible to this key</span>
+          </button>
+          {modelsOpen && (
+            <div style={{
+              display: 'flex', flexWrap: 'wrap', gap: 4,
+              marginTop: 8,
+            }}>
+              {modelIds.map((id, i) => (
+                <span key={i} style={{
+                  fontFamily: TD_FONTS.mono, fontSize: 10,
+                  color: t.muted, background: dark ? 'rgba(237,230,214,0.04)' : 'rgba(60,45,30,0.04)',
+                  padding: '2px 7px', borderRadius: 10,
+                  border: `1px solid ${t.hair}`,
+                  whiteSpace: 'nowrap',
+                }}>{id}</span>
+              ))}
             </div>
-          ))}
+          )}
         </div>
       )}
     </div>

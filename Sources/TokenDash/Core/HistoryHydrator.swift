@@ -57,6 +57,11 @@ enum HistoryHydrator {
         case "openrouter":
             let v = store.dailySpendDeltas(provider: id, days: 7)
             return (v, "usd")
+        case "moonshot":
+            // Moonshot has no usage endpoint — infer spend from the balance
+            // dropping day-over-day. Top-ups appear as 0 spend that day.
+            let v = store.dailyBalanceSpend(provider: id, days: 7)
+            return (v, "usd")
         default:
             return nil
         }
