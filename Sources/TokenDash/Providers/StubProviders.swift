@@ -270,6 +270,13 @@ final class OpenRouterProvider: UsageProvider {
                 ? Int((remaining / burnPerDay).rounded(.down))
                 : nil
 
+            // pct of credits consumed — fed into StatusBarState.aggregate so
+            // the menu-bar dot turns amber/red when the account is close to
+            // empty, matching how ElevenLabs character quota drives the dot.
+            let pctUsed: Int = c.total_credits > 0
+                ? min(100, Int(round(c.total_usage / c.total_credits * 100)))
+                : 0
+
             var extras: [String: String] = [
                 "credits": headline,
                 "spendLabel": spend,
@@ -281,6 +288,12 @@ final class OpenRouterProvider: UsageProvider {
                 "reqs7d":       "\(activity.totalReqs7d)",
                 "burnPerDay":   String(format: "$%.2f", burnPerDay),
             ]
+            // Only emit pct when we actually have a budget to compare
+            // against (credits > 0). Prevents pay-as-you-go-with-no-cap
+            // accounts from showing a misleading 0% or 100% in the dot.
+            if c.total_credits > 0 {
+                extras["pct"] = "\(pctUsed)"
+            }
             if let daysLeft = daysLeft {
                 extras["daysLeft"] = "\(daysLeft)"
             }
