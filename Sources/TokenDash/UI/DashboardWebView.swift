@@ -87,6 +87,24 @@ struct DashboardWebView: NSViewRepresentable {
                 }
                 return
             }
+            // "log:<anything>" — dev diagnostic bridge. Writes to
+            // ~/Library/Caches/tokendash-debug.log so we can trace events
+            // without developer tools enabled in WKWebView.
+            if body.hasPrefix("log:") {
+                let msg = String(body.dropFirst("log:".count))
+                let url = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+                    .appendingPathComponent("tokendash-debug.log")
+                let line = "\(Date()) JS: \(msg)\n"
+                if let data = line.data(using: .utf8) {
+                    if FileManager.default.fileExists(atPath: url.path),
+                       let h = try? FileHandle(forWritingTo: url) {
+                        h.seekToEndOfFile(); h.write(data); try? h.close()
+                    } else {
+                        try? data.write(to: url)
+                    }
+                }
+                return
+            }
             // "open-url:<https-url>" — open the target in the user's default
             // browser. Used by the provider picker to jump to docs pages.
             if body.hasPrefix("open-url:") {

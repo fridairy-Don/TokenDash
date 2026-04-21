@@ -2928,17 +2928,32 @@ function useOrder(key, defaultOrder) {
 
 // FLIP animation: measure each draggable's rect before/after order changes,
 // then play the inverse translate so the browser animates it back to 0.
+// Drag implementation rewritten around pointer events for reliability —
+// HTML5 drag-and-drop silently failed on Moonshot/GitHub/Vercel in
+// WKWebView. This version avoids every known quirk by:
+//   • using pointer events (fire unconditionally)
+//   • calling setOrder *once*, at drop time (not mid-drag, which caused
+//     the cascading re-renders that corrupted layout last attempt)
+//   • handing the FLIP animation the dragged-position rect so release
+//     animates smoothly to the new slot instead of teleporting
 function Draggable({ id, group, order, setOrder, t, children }) {
   const ref = React.useRef(null);
   const prevRectRef = React.useRef(null);
   const [dragging, setDragging] = React.useState(false);
+
+  // Drag state kept in refs so mid-drag re-renders don't wipe it.
+  const startRef = React.useRef(null);      // { x, y } on pointerdown
+  const activeRef = React.useRef(false);    // has drag threshold been crossed?
+  // Briefly suppresses the click that fires right after pointerup so the
+  // drop doesn't also toggle the card's drawer.
+  const justDraggedRef = React.useRef(false);
 
   React.useLayoutEffect(() => {
     const el = ref.current;
     if (!el) return;
     const prev = prevRectRef.current;
     const curr = el.getBoundingClientRect();
-    if (prev && !dragging && (prev.top !== curr.top || prev.left !== curr.left)) {
+    if (prev && !activeRef.current && (prev.top !== curr.top || prev.left !== curr.left)) {
       const dx = prev.left - curr.left;
       const dy = prev.top - curr.top;
       el.style.transition = 'none';
@@ -2950,52 +2965,123 @@ function Draggable({ id, group, order, setOrder, t, children }) {
     prevRectRef.current = curr;
   });
 
-  const reorder = (srcId) => {
-    setOrder(ord => {
-      if (srcId === id) return ord;
-      const next = ord.slice();
-      const from = next.indexOf(srcId);
-      const to = next.indexOf(id);
-      if (from < 0 || to < 0) return ord;
-      next.splice(from, 1);
-      next.splice(to, 0, srcId);
-      return next;
-    });
+  // Find which sibling (in the same group) the cursor is over at drop.
+  const findTargetId = (x, y) => {
+    const all = document.querySelectorAll(`[data-drag-group="${group}"]`);
+    for (const el of all) {
+      if (el === ref.current) continue;
+      const r = el.getBoundingClientRect();
+      if (x >= r.left && x <= r.right && y >= r.top && y <= r.bottom) {
+        return el.getAttribute('data-drag-id');
+      }
+    }
+    return null;
+  };
+
+  const onPointerDown = (e) => {
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
+    if (e.target.closest('input, button, a, textarea, select')) return;
+    startRef.current = { x: e.clientX, y: e.clientY };
+    activeRef.current = false;
+    try { ref.current.setPointerCapture(e.pointerId); } catch (err) {}
+    try { postSwift('log:DRAG[' + id + '] pointerdown'); } catch (err) {}
+  };
+
+  const onPointerMove = (e) => {
+    const start = startRef.current;
+    if (!start) return;
+    const dx = e.clientX - start.x;
+    const dy = e.clientY - start.y;
+    if (!activeRef.current) {
+      if (Math.abs(dx) + Math.abs(dy) < 5) return;
+      activeRef.current = true;
+      setDragging(true);
+    }
+    const el = ref.current;
+    if (el) {
+      el.style.transition = 'none';
+      el.style.transform = `translate(${dx}px, ${dy}px)`;
+      el.style.zIndex = '10';
+      el.style.pointerEvents = 'none';  // cursor falls through to siblings
+    }
+  };
+
+  const onPointerUp = (e) => {
+    const wasActive = activeRef.current;
+    const el = ref.current;
+    startRef.current = null;
+    activeRef.current = false;
+
+    if (el) el.style.pointerEvents = '';
+    if (!wasActive) return;   // click, not a drag — nothing to reorder
+
+    setDragging(false);
+    const targetId = findTargetId(e.clientX, e.clientY);
+
+    if (el) {
+      // Capture the card's current visual rect (still translated) so the
+      // FLIP useLayoutEffect below animates from here to the new slot.
+      prevRectRef.current = el.getBoundingClientRect();
+      el.style.transition = 'none';
+      el.style.transform = '';
+      el.style.zIndex = '';
+    }
+
+    try { postSwift('log:DRAG[' + id + '] dropped, target=' + (targetId || 'null')); } catch (err) {}
+    if (targetId) {
+      setOrder(ord => {
+        const next = ord.slice();
+        const from = next.indexOf(id);
+        const to = next.indexOf(targetId);
+        if (from < 0 || to < 0) return ord;
+        next.splice(from, 1);
+        next.splice(to, 0, id);
+        return next;
+      });
+    }
+    // Arm the "just dragged" flag for the click that will fire right after
+    // pointerup, so the drop doesn't also toggle the drawer. Clear on the
+    // next tick — future clicks are unrelated and must work normally.
+    justDraggedRef.current = true;
+    setTimeout(() => { justDraggedRef.current = false; }, 0);
+    e.stopPropagation();
+  };
+
+  const onPointerCancel = () => {
+    const el = ref.current;
+    startRef.current = null;
+    activeRef.current = false;
+    setDragging(false);
+    if (el) {
+      el.style.transition = 'transform 180ms cubic-bezier(0.2, 0.8, 0.2, 1)';
+      el.style.transform = '';
+      el.style.zIndex = '';
+      el.style.pointerEvents = '';
+    }
   };
 
   return (
     <div
       ref={ref}
-      draggable
-      onDragStart={(e) => {
-        _dragState.group = group;
-        _dragState.id = id;
-        e.dataTransfer.effectAllowed = 'move';
-        try { e.dataTransfer.setData('text/plain', id); } catch (err) {}
-        setTimeout(() => setDragging(true), 0);
-      }}
-      onDragEnd={() => {
-        setDragging(false);
-        _dragState.group = null;
-        _dragState.id = null;
-      }}
-      onDragOver={(e) => {
-        if (_dragState.group !== group || _dragState.id == null) return;
-        e.preventDefault();
-        e.dataTransfer.dropEffect = 'move';
-        if (_dragState.id !== id) reorder(_dragState.id);
-      }}
-      onDrop={(e) => {
-        if (_dragState.group !== group) return;
-        e.preventDefault();
+      data-drag-id={id}
+      data-drag-group={group}
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={onPointerUp}
+      onPointerCancel={onPointerCancel}
+      onClickCapture={(e) => {
+        // If a drag just ended, stop the click from toggling the drawer.
+        if (justDraggedRef.current) { e.stopPropagation(); e.preventDefault(); }
       }}
       style={{
         position: 'relative',
-        opacity: dragging ? 0.35 : 1,
+        opacity: dragging ? 0.85 : 1,
         borderRadius: 14,
-        cursor: dragging ? 'grabbing' : 'auto',
+        cursor: dragging ? 'grabbing' : 'grab',
         userSelect: 'none',
         WebkitUserSelect: 'none',
+        touchAction: 'none',
+        boxShadow: dragging ? '0 8px 22px rgba(0,0,0,0.18)' : 'none',
       }}>
       {children}
     </div>
