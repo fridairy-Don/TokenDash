@@ -2,8 +2,12 @@ import Foundation
 
 // MARK: - Moonshot (Kimi)
 //
-// Moonshot's only public balance endpoint is `/v1/users/me/balance`, which
-// returns three numbers:
+// Two different hosts depending on where the account was registered:
+//   - api.moonshot.cn  — platform.moonshot.cn     (China mainland)
+//   - api.moonshot.ai  — platform.kimi.ai / .ai   (international)
+// Same path, same auth, same payload shape. We try whichever host succeeds.
+//
+// Balance endpoint returns three numbers:
 //   available_balance — what you can actually spend right now
 //   voucher_balance   — promo credits
 //   cash_balance      — paid top-ups
@@ -13,6 +17,14 @@ import Foundation
 final class MoonshotProvider: UsageProvider {
     let id = "moonshot"
     let displayName = "Moonshot (Kimi)"
+
+    // Stable ordering: .ai first because platform.kimi.ai traffic is more
+    // likely to hit .ai; a .cn key trying .ai returns 401 quickly and we
+    // fall through.
+    private static let hosts = [
+        "https://api.moonshot.ai",
+        "https://api.moonshot.cn",
+    ]
 
     func snapshot() async -> ProviderSnapshot {
         guard let key = KeyStore.load(account: id), !key.isEmpty else {
@@ -85,11 +97,21 @@ final class MoonshotProvider: UsageProvider {
     }
 
     private func fetchBalance(key: String) async throws -> BalanceData {
-        let env = try await APIClient.shared.getJSON(
-            BalanceEnvelope.self,
-            url: URL(string: "https://api.moonshot.cn/v1/users/me/balance")!,
-            headers: ["Authorization": "Bearer \(key)"]
-        )
-        return env.data
+        var lastError: Error = NSError(domain: "Moonshot", code: -1,
+                                       userInfo: [NSLocalizedDescriptionKey: "no hosts tried"])
+        for host in Self.hosts {
+            guard let url = URL(string: "\(host)/v1/users/me/balance") else { continue }
+            do {
+                let env = try await APIClient.shared.getJSON(
+                    BalanceEnvelope.self, url: url,
+                    headers: ["Authorization": "Bearer \(key)"]
+                )
+                return env.data
+            } catch {
+                lastError = error
+                continue   // try next host
+            }
+        }
+        throw lastError
     }
 }
