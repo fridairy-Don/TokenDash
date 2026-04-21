@@ -2928,37 +2928,17 @@ function useOrder(key, defaultOrder) {
 
 // FLIP animation: measure each draggable's rect before/after order changes,
 // then play the inverse translate so the browser animates it back to 0.
-// Rewritten around pointer events rather than HTML5 drag-and-drop. The
-// previous HTML5 implementation worked for some cards and silently failed
-// for others (Moonshot / GitHub / Vercel) — WKWebView's dragstart can be
-// suppressed by inner elements with their own interaction semantics, and
-// there's no clean way to force it. Pointer events fire unconditionally.
-//
-// Interaction model:
-//   mousedown → remember origin
-//   mousemove > 5 px → activate drag; card lifts + follows the cursor
-//   each move → if the cursor is over a sibling card's midpoint, swap
-//   mouseup → drop (cards settle into their new slots)
-//   mouseup with no drag activation → let the click fire (expand drawer)
 function Draggable({ id, group, order, setOrder, t, children }) {
   const ref = React.useRef(null);
   const prevRectRef = React.useRef(null);
   const [dragging, setDragging] = React.useState(false);
 
-  // Refs used during a drag — deliberately NOT state, so a mid-drag
-  // re-render doesn't lose them.
-  const startRef = React.useRef(null);
-  const activeRef = React.useRef(false);
-  const offsetRef = React.useRef({ x: 0, y: 0 });
-
-  // FLIP animation when the order changes without an active drag (e.g.
-  // reset-to-default, or another card being dragged past this one).
   React.useLayoutEffect(() => {
     const el = ref.current;
     if (!el) return;
     const prev = prevRectRef.current;
     const curr = el.getBoundingClientRect();
-    if (prev && !activeRef.current && (prev.top !== curr.top || prev.left !== curr.left)) {
+    if (prev && !dragging && (prev.top !== curr.top || prev.left !== curr.left)) {
       const dx = prev.left - curr.left;
       const dy = prev.top - curr.top;
       el.style.transition = 'none';
@@ -2970,129 +2950,52 @@ function Draggable({ id, group, order, setOrder, t, children }) {
     prevRectRef.current = curr;
   });
 
-  // Find a sibling draggable under (x, y) in the same group.
-  const findUnder = (x, y) => {
-    const all = document.querySelectorAll(`[data-draggable-group="${group}"]`);
-    for (const el of all) {
-      if (el === ref.current) continue;
-      const r = el.getBoundingClientRect();
-      if (x >= r.left && x <= r.right && y >= r.top && y <= r.bottom) {
-        return el.getAttribute('data-draggable-id');
-      }
-    }
-    return null;
-  };
-
-  const onPointerDown = (e) => {
-    // Left mouse / primary touch only.
-    if (e.pointerType === 'mouse' && e.button !== 0) return;
-    // Ignore drags originating from form controls inside the card — pasting
-    // a key or clicking Save must not turn into a reorder.
-    if (e.target.closest('input, button, a, textarea, select')) return;
-
-    startRef.current = { x: e.clientX, y: e.clientY };
-    activeRef.current = false;
-    offsetRef.current = { x: 0, y: 0 };
-    try { ref.current.setPointerCapture(e.pointerId); } catch (err) {}
-  };
-
-  const onPointerMove = (e) => {
-    const start = startRef.current;
-    if (!start) return;
-    const dx = e.clientX - start.x;
-    const dy = e.clientY - start.y;
-
-    // Activate once pointer has moved past the activation threshold.
-    if (!activeRef.current) {
-      if (Math.abs(dx) + Math.abs(dy) < 5) return;
-      activeRef.current = true;
-      _dragState.group = group;
-      _dragState.id = id;
-      setDragging(true);
-    }
-
-    offsetRef.current = { x: dx, y: dy };
-    const el = ref.current;
-    if (el) {
-      el.style.transition = 'none';
-      el.style.transform = `translate(${dx}px, ${dy}px)`;
-      el.style.zIndex = '10';
-    }
-
-    // Check for overlap with another card in the same group — reorder on the fly.
-    const targetId = findUnder(e.clientX, e.clientY);
-    if (targetId && targetId !== id) {
-      setOrder(ord => {
-        const next = ord.slice();
-        const from = next.indexOf(id);
-        const to = next.indexOf(targetId);
-        if (from < 0 || to < 0) return ord;
-        next.splice(from, 1);
-        next.splice(to, 0, id);
-        return next;
-      });
-      // After the reorder, the FLIP effect repositions our sibling. We also
-      // need to reset our own visual offset so the card sits at the new
-      // slot, not at cursor-displacement from the old slot.
-      startRef.current = { x: e.clientX, y: e.clientY };
-      if (el) {
-        el.style.transition = 'none';
-        el.style.transform = '';
-        void el.offsetHeight;
-      }
-    }
-  };
-
-  const onPointerUp = (e) => {
-    const start = startRef.current;
-    startRef.current = null;
-    if (!activeRef.current) return;                   // no drag happened
-    activeRef.current = false;
-    _dragState.group = null;
-    _dragState.id = null;
-    setDragging(false);
-    const el = ref.current;
-    if (el) {
-      el.style.transition = 'transform 180ms cubic-bezier(0.2, 0.8, 0.2, 1)';
-      el.style.transform = '';
-      el.style.zIndex = '';
-    }
-    // Swallow the click that would follow — clicking a card during a drag
-    // should not toggle its drawer.
-    e.stopPropagation();
-  };
-
-  // Stop the synthetic click if a drag just happened. Without this, mouseup
-  // at the end of a reorder would also toggle the drawer.
-  const onClickCapture = (e) => {
-    if (activeRef.current || offsetRef.current.x || offsetRef.current.y) {
-      e.stopPropagation();
-      e.preventDefault();
-      offsetRef.current = { x: 0, y: 0 };
-    }
+  const reorder = (srcId) => {
+    setOrder(ord => {
+      if (srcId === id) return ord;
+      const next = ord.slice();
+      const from = next.indexOf(srcId);
+      const to = next.indexOf(id);
+      if (from < 0 || to < 0) return ord;
+      next.splice(from, 1);
+      next.splice(to, 0, srcId);
+      return next;
+    });
   };
 
   return (
     <div
       ref={ref}
-      data-draggable-id={id}
-      data-draggable-group={group}
-      onPointerDown={onPointerDown}
-      onPointerMove={onPointerMove}
-      onPointerUp={onPointerUp}
-      onPointerCancel={onPointerUp}
-      onClickCapture={onClickCapture}
+      draggable
+      onDragStart={(e) => {
+        _dragState.group = group;
+        _dragState.id = id;
+        e.dataTransfer.effectAllowed = 'move';
+        try { e.dataTransfer.setData('text/plain', id); } catch (err) {}
+        setTimeout(() => setDragging(true), 0);
+      }}
+      onDragEnd={() => {
+        setDragging(false);
+        _dragState.group = null;
+        _dragState.id = null;
+      }}
+      onDragOver={(e) => {
+        if (_dragState.group !== group || _dragState.id == null) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'move';
+        if (_dragState.id !== id) reorder(_dragState.id);
+      }}
+      onDrop={(e) => {
+        if (_dragState.group !== group) return;
+        e.preventDefault();
+      }}
       style={{
         position: 'relative',
-        opacity: dragging ? 0.85 : 1,
+        opacity: dragging ? 0.35 : 1,
         borderRadius: 14,
-        cursor: dragging ? 'grabbing' : 'grab',
-        // No text selection during drag; also kills the WebKit long-press
-        // "copy" menu that can intercept pointer sequences on macOS.
+        cursor: dragging ? 'grabbing' : 'auto',
         userSelect: 'none',
         WebkitUserSelect: 'none',
-        touchAction: 'none',       // block scroll during drag
-        boxShadow: dragging ? '0 8px 22px rgba(0,0,0,0.18)' : 'none',
       }}>
       {children}
     </div>
