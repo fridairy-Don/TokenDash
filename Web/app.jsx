@@ -1955,8 +1955,12 @@ function VD2_Groq({ t, d }) {
   );
 }
 
-// ── Moonshot compact card ───────────────────────────────────────────────────
+// ── Moonshot compact card + drawer ─────────────────────────────────────────
 function VD2_Moonshot({ t, d }) {
+  const [expanded, setExpanded] = React.useState(false);
+  const dark = t.ink === VD2_DARK.ink;
+  const hasDetail = (d.models && d.models.length > 0) || d.spentTodayLabel;
+
   if (!d.headline || d.state === 'unconfigured') {
     return (
       <VD2_Compact t={t}>
@@ -1973,25 +1977,131 @@ function VD2_Moonshot({ t, d }) {
     );
   }
   return (
-    <VD2_Compact t={t}>
-      <Monogram letter="M" t={t} tone="free" />
-      <div style={{ minWidth: 0, flex: 1 }}>
-        <div style={{ fontSize: 12, fontWeight: 600, color: t.ink, display: 'flex', alignItems: 'center', gap: 6, whiteSpace: 'nowrap' }}>
-          {d.name}<Pill t={t} tone="free">{d.pill}</Pill>
+    <div
+      onClick={() => hasDetail && setExpanded(e => !e)}
+      style={{
+        background: t.compactBg,
+        border: `1px solid ${dark ? 'rgba(237,230,214,0.06)' : 'rgba(60,45,30,0.04)'}`,
+        borderRadius: 10, padding: '12px 14px', marginBottom: 8,
+        cursor: hasDetail ? 'pointer' : 'default',
+      }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        <Monogram letter="M" t={t} tone="free" />
+        <div style={{ minWidth: 0 }}>
+          <div style={{ fontSize: 12, fontWeight: 600, color: t.ink, display: 'flex', alignItems: 'center', gap: 6, whiteSpace: 'nowrap' }}>
+            {d.name}<Pill t={t} tone="free">{d.pill}</Pill>
+          </div>
+          <div style={{
+            fontFamily: TD_FONTS.mono, fontSize: 10.5, color: t.dim, marginTop: 3,
+            fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap',
+          }}>
+            {d.cashLabel && `Cash ${d.cashLabel}`}
+            {d.voucherLabel && ` · Voucher ${d.voucherLabel}`}
+            {typeof d.modelsCount === 'string' && d.modelsCount !== '0' && ` · ${d.modelsCount} models`}
+          </div>
         </div>
-        <div style={{
-          fontFamily: TD_FONTS.mono, fontSize: 10.5, color: t.dim, marginTop: 3,
-          fontVariantNumeric: 'tabular-nums',
-        }}>
-          {d.cashLabel && `Cash ${d.cashLabel}`}
-          {d.voucherLabel && ` · Voucher ${d.voucherLabel}`}
+        <div style={{ flex: 1 }} />
+        <div style={{ textAlign: 'right' }}>
+          <div style={{ fontFamily: TD_FONTS.mono, fontSize: 15, color: t.ink, fontVariantNumeric: 'tabular-nums', letterSpacing: -0.3, lineHeight: 1 }}>{d.headline}</div>
+          <div style={{ fontFamily: TD_FONTS.serif, fontStyle: 'italic', fontSize: 10, color: t.dim, marginTop: 4 }}>available</div>
         </div>
       </div>
-      <div style={{ textAlign: 'right' }}>
-        <div style={{ fontFamily: TD_FONTS.mono, fontSize: 15, color: t.ink, fontVariantNumeric: 'tabular-nums', letterSpacing: -0.3, lineHeight: 1 }}>{d.headline}</div>
-        <div style={{ fontFamily: TD_FONTS.serif, fontStyle: 'italic', fontSize: 10, color: t.dim, marginTop: 4 }}>available</div>
+
+      {expanded && <VD2_MoonshotDrawer t={t} d={d} />}
+    </div>
+  );
+}
+
+function VD2_MoonshotDrawer({ t, d }) {
+  const dark = t.ink === VD2_DARK.ink;
+  const models = d.models || [];
+  // Group models by context-length bucket so the drawer doesn't become a
+  // wall of ids when the platform has 8-10 variants. "8k" models on one
+  // line, "32k" on another, etc.
+  const groups = {};
+  models.forEach(m => {
+    const k = m.ctxK > 0 ? `${m.ctxK}k context` : 'other';
+    if (!groups[k]) groups[k] = [];
+    groups[k].push(m);
+  });
+  const groupOrder = Object.keys(groups).sort((a, b) => {
+    const na = parseInt(a, 10) || 0;
+    const nb = parseInt(b, 10) || 0;
+    return na - nb;
+  });
+
+  return (
+    <div
+      onClick={(e) => e.stopPropagation()}
+      style={{ marginTop: 12, paddingTop: 10, borderTop: `1px solid ${t.hair}` }}>
+
+      {/* Tile row */}
+      <div style={{
+        display: 'grid', gridTemplateColumns: '1fr 1fr 1fr',
+        gap: 8, marginBottom: 10,
+      }}>
+        {[
+          { k: 'Spent today', v: d.spentTodayLabel || (d.currency === '$' ? '$0.00' : '¥0.00'),
+            hint: 'from balance delta' },
+          { k: 'Cash',    v: d.cashLabel    || '—', hint: 'paid top-ups' },
+          { k: 'Voucher', v: d.voucherLabel || '—', hint: 'promo credits' },
+        ].map((x, i) => (
+          <div key={i} style={{
+            background: t.compactBg, border: `1px solid ${t.hair}`,
+            borderRadius: 6, padding: '6px 8px',
+          }}>
+            <div style={{
+              fontFamily: TD_FONTS.serif, fontStyle: 'italic',
+              fontSize: 9.5, color: t.dim, marginBottom: 2,
+              whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+            }}>{x.k}</div>
+            <div style={{
+              fontFamily: TD_FONTS.mono, fontSize: 13, color: t.ink,
+              fontVariantNumeric: 'tabular-nums',
+            }}>{x.v}</div>
+            <div style={{
+              fontFamily: TD_FONTS.serif, fontStyle: 'italic',
+              fontSize: 9, color: t.dim, marginTop: 2,
+            }}>{x.hint}</div>
+          </div>
+        ))}
       </div>
-    </VD2_Compact>
+
+      {/* Models accessible to this key */}
+      {models.length > 0 && (
+        <div>
+          <div style={{
+            fontFamily: TD_FONTS.serif, fontStyle: 'italic', fontSize: 11.5, color: t.ink,
+            marginBottom: 2,
+          }}>Available models ({models.length})</div>
+          <div style={{
+            fontFamily: TD_FONTS.serif, fontStyle: 'italic', fontSize: 10, color: t.dim,
+            marginBottom: 8,
+          }}>what your key can call · grouped by context window</div>
+
+          {groupOrder.map((gkey) => (
+            <div key={gkey} style={{ marginBottom: 8 }}>
+              <div style={{
+                fontFamily: TD_FONTS.serif, fontStyle: 'italic',
+                fontSize: 10, color: t.dim, marginBottom: 4,
+                textTransform: 'uppercase', letterSpacing: 0.5,
+              }}>{gkey}</div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                {groups[gkey].map((m, i) => (
+                  <span key={i} title={m.id} style={{
+                    fontFamily: TD_FONTS.mono, fontSize: 10,
+                    color: t.ink, background: dark ? 'rgba(237,230,214,0.06)' : 'rgba(60,45,30,0.06)',
+                    padding: '2px 7px', borderRadius: 10,
+                    border: `1px solid ${t.hair}`,
+                    whiteSpace: 'nowrap',
+                  }}>{m.id}</span>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -2830,6 +2940,13 @@ function Draggable({ id, group, order, setOrder, t, children }) {
         // No CSS transition here — the FLIP effect controls transform inline.
         borderRadius: 14,
         cursor: dragging ? 'grabbing' : 'auto',
+        // Prevent text-selection hijacking the drag. WebKit will start a
+        // text selection on mousedown over styled text and that can keep
+        // the native drag from initiating, which is why newer compact
+        // cards (Moonshot / GitHub / Vercel) felt "un-draggable" — the
+        // built-in `draggable` attr was being overridden by selection.
+        userSelect: 'none',
+        WebkitUserSelect: 'none',
       }}>
       {children}
     </div>

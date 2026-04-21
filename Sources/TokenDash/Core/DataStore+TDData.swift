@@ -211,7 +211,7 @@ extension DataStore {
                 if !nums.isEmpty { out["history7"] = nums }
             case "historyMax":
                 if let n = Double(v) { out["historyMax"] = n }
-            case "topModels", "topProjects", "topVoices", "allModels", "dailySpend", "rateBuckets":
+            case "topModels", "topProjects", "topVoices", "allModels", "dailySpend", "rateBuckets", "models":
                 if let data = v.data(using: .utf8),
                    let arr = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] {
                     out[k] = arr
