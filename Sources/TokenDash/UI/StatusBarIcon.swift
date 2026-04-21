@@ -3,15 +3,16 @@ import AppKit
 // MARK: - StatusBarIcon
 //
 // A state-aware template image for the menu bar. We don't use an SF Symbol
-// because we want a thin arc + dot mark that matches the app icon and varies
-// a tiny amount based on aggregate state:
+// because we want a thin arc + dot mark that matches the app icon and always
+// carries a colored status badge so the menu bar communicates at a glance:
 //
-//   .ok         — charcoal/white (template tint) arc + dot
-//   .warn       — same mark but with a subtle amber badge dot in the corner
-//   .danger     — red pulse badge + red dot
+//   .ok         — sage green dot (system healthy, all quotas under 80%)
+//   .warn       — amber dot (any quota ≥ 80%)
+//   .danger     — red dot  (any quota ≥ 95% or provider in error state)
 //
-// The icon is drawn as a template image so it automatically adapts to the
-// menu bar's light/dark context.
+// The arc is drawn as a template image so it auto-adapts to the menu bar's
+// light/dark context; the dot is drawn on top as non-template so its color
+// survives macOS's auto-tint.
 
 enum StatusBarState {
     case ok
@@ -70,14 +71,26 @@ enum StatusBarIcon {
         return img
     }
 
-    /// Non-template badge drawn on top of the template, so the colour survives
-    /// the menu bar's auto-tint. Returns a full-size NSImage.
+    /// Non-template badge drawn on top of the template arc, so the colour
+    /// survives the menu bar's auto-tint. Returns a full-size NSImage.
+    /// Always draws a badge dot (green/amber/red) — the icon is never
+    /// "bare", so users always see a colored status indicator.
     static func badgedImage(state: StatusBarState) -> NSImage {
         let base = templateImage(state: state)
-        guard state == .warn || state == .danger else { return base }
-        let badgeColor: NSColor = (state == .danger)
-            ? NSColor(srgbRed: 0.82, green: 0.30, blue: 0.24, alpha: 1.0)   // warm red
-            : NSColor(srgbRed: 0.88, green: 0.60, blue: 0.20, alpha: 1.0)   // amber
+        // .offline stays bare (no dot) to visually distinguish "disconnected"
+        // from "running — state x". In practice we only emit .ok/.warn/.danger.
+        guard state != .offline else { return base }
+        let badgeColor: NSColor
+        switch state {
+        case .danger:
+            badgeColor = NSColor(srgbRed: 0.82, green: 0.30, blue: 0.24, alpha: 1.0)   // warm red
+        case .warn:
+            badgeColor = NSColor(srgbRed: 0.88, green: 0.60, blue: 0.20, alpha: 1.0)   // amber
+        case .ok:
+            badgeColor = NSColor(srgbRed: 0.50, green: 0.66, blue: 0.38, alpha: 1.0)   // sage green
+        case .offline:
+            return base
+        }
         let size = base.size
         let composed = NSImage(size: size, flipped: false) { rect in
             base.draw(in: rect)

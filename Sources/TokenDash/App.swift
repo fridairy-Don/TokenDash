@@ -81,7 +81,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func configureStatusButton() {
         guard let button = statusItem.button else { return }
-        button.image = StatusBarIcon.templateImage(state: .ok)
+        button.image = StatusBarIcon.badgedImage(state: .ok)
         button.action = #selector(handleClick(_:))
         button.target = self
         // Receive both left- and right-click events so we can route them.
