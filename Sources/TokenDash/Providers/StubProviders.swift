@@ -23,7 +23,7 @@ final class ElevenLabsProvider: UsageProvider {
     let displayName = "ElevenLabs"
 
     func snapshot() async -> ProviderSnapshot {
-        guard let key = Keychain.load(account: id), !key.isEmpty else {
+        guard let key = KeyStore.load(account: id), !key.isEmpty else {
             return unconfigured()
         }
         do {
@@ -235,7 +235,7 @@ final class OpenRouterProvider: UsageProvider {
     let displayName = "OpenRouter"
 
     func snapshot() async -> ProviderSnapshot {
-        guard let key = Keychain.load(account: id), !key.isEmpty else {
+        guard let key = KeyStore.load(account: id), !key.isEmpty else {
             return unconfigured()
         }
         do {
@@ -438,7 +438,7 @@ final class GroqProvider: UsageProvider {
     let displayName = "Groq"
 
     func snapshot() async -> ProviderSnapshot {
-        let hasKey = Keychain.hasKey(account: id)
+        let hasKey = KeyStore.hasKey(account: id)
         return ProviderSnapshot(
             id: id, title: displayName, subtitle: "Free tier",
             glyph: "G", accent: .slate, size: .compact,

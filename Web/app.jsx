@@ -1576,28 +1576,12 @@ function VD2_Groq({ t, d }) {
   );
 }
 
-function VD2_AddBtn({ t }) {
-  const [hover, setHover] = React.useState(false);
-  return (
-    <button
-      onMouseEnter={() => setHover(true)}
-      onMouseLeave={() => setHover(false)}
-      onClick={() => postSwift('add-provider')}
-      style={{
-        width: '100%', marginTop: 10,
-        background: hover ? t.surfaceAlt : 'transparent',
-        border: `1px dashed ${t.border}`,
-        borderRadius: 10, padding: '10px',
-        color: hover ? t.ink : t.dim, fontFamily: TD_FONTS.sans, fontSize: 12, fontWeight: 500,
-        cursor: 'pointer', display: 'flex', alignItems: 'center',
-        justifyContent: 'center', gap: 6,
-        transition: 'background 120ms, color 120ms',
-      }}>
-      <svg width="11" height="11" viewBox="0 0 12 12" fill="none"><path d="M6 2v8M2 6h8" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/></svg>
-      <span>Add provider</span>
-    </button>
-  );
-}
+// `Add provider` was wired to postSwift('add-provider') but there's no Swift
+// handler, so it was a dead button. Dynamic provider registration is a
+// substantial feature (generic HTTP provider + runtime registry +
+// persistence); we'll bring the UI back when the backend exists.
+// Keeping an empty placeholder export so any stale call sites fail loudly.
+function VD2_AddBtn() { return null; }
 
 function VD2_CompactRouter({ t, p }) {
   switch (p.kind) {
@@ -1698,19 +1682,10 @@ function VD2_Settings({ t, theme, setTheme, onResetOrder, orderDirty }) {
         <SectionLabel t={t}>API Keys</SectionLabel>
         <div style={{
           marginTop: 6, fontFamily: TD_FONTS.sans, fontSize: 11, color: t.dim, lineHeight: 1.5,
-        }}>Keys are stored in your macOS Keychain. Nothing is sent anywhere else.</div>
+        }}>Keys are stored locally in <code style={{ fontFamily: TD_FONTS.mono, fontSize: 10 }}>~/Library/Application Support/TokenDash/keys.plist</code> (0600, owner-only). Nothing leaves your Mac.</div>
         <KeyRow t={t} label="ElevenLabs" account="elevenlabs" hasKey={!!ks.elevenlabs} />
         <KeyRow t={t} label="OpenRouter" account="openrouter" hasKey={!!ks.openrouter} />
         <KeyRow t={t} label="Groq" account="groq" hasKey={!!ks.groq} />
-        <div style={{
-          marginTop: 10, padding: '8px 10px', borderRadius: 6,
-          background: dark ? 'rgba(143,168,124,0.06)' : 'rgba(143,168,124,0.10)',
-          fontFamily: TD_FONTS.sans, fontSize: 10.5, color: t.dim, lineHeight: 1.45,
-        }}>
-          <span style={{ color: t.muted, fontWeight: 600 }}>Tip —</span> add keys here,
-          not via the <code style={{ fontFamily: TD_FONTS.mono, fontSize: 10 }}>security</code> CLI.
-          CLI-added items aren't readable by this app due to Keychain ACLs.
-        </div>
       </SectionCard>
 
       <SectionCard t={t}>
@@ -2028,7 +2003,6 @@ function VD2_App() {
               </Draggable>
             );
           })}
-          <VD2_AddBtn t={t} />
         </>
       )}
     </VD2_Shell>

@@ -54,16 +54,16 @@ struct DashboardWebView: NSViewRepresentable {
                 let value = String(payload[payload.index(after: colon)...])
                 let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
                 if trimmed.isEmpty {
-                    Keychain.delete(account: provider)
+                    KeyStore.delete(account: provider)
                 } else {
-                    Keychain.save(trimmed, account: provider)
+                    KeyStore.save(trimmed, account: provider)
                 }
                 Task { await self.store?.refreshAll() }
                 return
             }
             if body.hasPrefix("clear-key:") {
                 let provider = String(body.dropFirst("clear-key:".count))
-                Keychain.delete(account: provider)
+                KeyStore.delete(account: provider)
                 Task { await self.store?.refreshAll() }
                 return
             }

@@ -28,6 +28,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
 
+        // One-shot migration: drain any legacy Keychain entries into the
+        // file-based KeyStore so users don't keep seeing password prompts
+        // after an upgrade. Fresh installs and already-migrated users
+        // both finish this in microseconds with zero prompts.
+        KeyStore.migrateFromKeychainIfNeeded(accounts: ["elevenlabs", "openrouter", "groq"])
+
         store = DataStore()
         store.startAutoRefresh(interval: 30)
 

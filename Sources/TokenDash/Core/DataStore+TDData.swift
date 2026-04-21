@@ -40,11 +40,11 @@ extension DataStore {
 
         // Which API keys are stored — Settings UI uses this to render per-provider
         // rows. We only expose whether the key exists; the key itself never leaves
-        // Keychain.
+        // KeyStore.
         root["keyStatus"] = [
-            "elevenlabs": Keychain.hasKey(account: "elevenlabs"),
-            "openrouter": Keychain.hasKey(account: "openrouter"),
-            "groq":       Keychain.hasKey(account: "groq"),
+            "elevenlabs": KeyStore.hasKey(account: "elevenlabs"),
+            "openrouter": KeyStore.hasKey(account: "openrouter"),
+            "groq":       KeyStore.hasKey(account: "groq"),
         ]
 
         let data = (try? JSONSerialization.data(withJSONObject: root, options: [])) ?? Data()
