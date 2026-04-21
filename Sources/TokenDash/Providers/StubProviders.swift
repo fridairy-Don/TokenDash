@@ -48,11 +48,66 @@ final class ElevenLabsProvider: UsageProvider {
             let cal = Calendar.current
             let startOfToday = Int(cal.startOfDay(for: Date()).timeIntervalSince1970)
             let startOfYesterday = Int(cal.date(byAdding: .day, value: -1, to: cal.startOfDay(for: Date()))!.timeIntervalSince1970)
-            let counts = (try? await fetchRequestCounts(key: key,
-                                                       todayStart: startOfToday,
-                                                       yesterdayStart: startOfYesterday))
-                ?? (today: 0, yesterday: 0, charsToday: 0)
-            let reqTrend = Fmt.trend(from: counts.yesterday, to: counts.today) ?? ""
+            let h = (try? await fetchRequestCounts(key: key,
+                                                    todayStart: startOfToday,
+                                                    yesterdayStart: startOfYesterday))
+                ?? ElevenHistory()
+            let reqTrend = Fmt.trend(from: h.yesterday, to: h.today) ?? ""
+
+            // --- Derived stats for the drawer ------------------------------
+            let avgChars = h.today > 0 ? h.charsToday / h.today : 0
+            // Abuse detector: a single hour carrying much more than the
+            // active-hour average is suspicious for a kid's TTS game.
+            let nonZeroHours = h.hourBuckets.filter { $0 > 0 }
+            let hourMean = nonZeroHours.isEmpty ? 0 : nonZeroHours.reduce(0, +) / nonZeroHours.count
+            let maxHourIdx = h.hourBuckets.enumerated().max(by: { $0.element < $1.element })?.offset ?? 0
+            let maxHour = h.hourBuckets[maxHourIdx]
+            // Flag only when today has a meaningful burst (≥5x the non-zero
+            // hour mean AND absolute >30 requests in one hour) — hand-tuned
+            // to not false-positive on a typical 10-req play session.
+            let anomalyHour: Int? = (maxHour >= max(30, hourMean * 5) && hourMean > 0) ? maxHourIdx : nil
+
+            // Top voices (by request count, today)
+            let topVoices = h.byVoice
+                .sorted { $0.value.reqs > $1.value.reqs }
+                .prefix(5)
+                .map { (name, v) -> [String: Any] in
+                    [
+                        "name":  name,
+                        "reqs":  v.reqs,
+                        "chars": v.chars,
+                    ]
+                }
+
+            var extras: [String: String] = [
+                "pct": "\(pct)",
+                "usedLabel": used_s,
+                "totalLabel": total_s,
+                "resets": resetText,
+                "reqsToday": "\(h.today)",
+                "reqsYesterday": "\(h.yesterday)",
+                "reqTrend": reqTrend,
+                "charsToday": Fmt.int(h.charsToday),
+                "avgChars": "\(avgChars)",
+                "maxCharsReq": "\(h.maxCharsInSingleReq)",
+                "peakHourIdx": "\(maxHourIdx)",
+                "peakHourReqs": "\(maxHour)",
+                // For PersistentStore: billable = cycle character usage,
+                // useful as a secondary metric for char-consumption sparklines.
+                "billable": "\(used)",
+            ]
+            if let anomalyHour = anomalyHour {
+                extras["anomalyHour"] = "\(anomalyHour)"
+                extras["anomalyHourReqs"] = "\(maxHour)"
+            }
+            // Hour bucket arrays as CSV — DataStore+TDData expands to real JS arrays.
+            extras["hourBucketsReqs"]  = h.hourBuckets.map(String.init).joined(separator: ",")
+            extras["hourBucketsChars"] = h.charBuckets.map(String.init).joined(separator: ",")
+            if !topVoices.isEmpty,
+               let data = try? JSONSerialization.data(withJSONObject: topVoices),
+               let s = String(data: data, encoding: .utf8) {
+                extras["topVoices"] = s
+            }
 
             return ProviderSnapshot(
                 id: id, title: displayName, subtitle: tier,
@@ -61,19 +116,7 @@ final class ElevenLabsProvider: UsageProvider {
                 secondaryValue: "\(used_s) / \(total_s)",
                 state: .ok,
                 note: resetText,
-                extras: [
-                    "pct": "\(pct)",
-                    "usedLabel": used_s,
-                    "totalLabel": total_s,
-                    "resets": resetText,
-                    "reqsToday": "\(counts.today)",
-                    "reqsYesterday": "\(counts.yesterday)",
-                    "reqTrend": reqTrend,
-                    "charsToday": Fmt.int(counts.charsToday),
-                    // For PersistentStore: billable = cycle character usage,
-                    // useful as a secondary metric for char-consumption sparklines.
-                    "billable": "\(used)",
-                ]
+                extras: extras
             )
         } catch {
             return ProviderSnapshot(
@@ -113,16 +156,29 @@ final class ElevenLabsProvider: UsageProvider {
         )
     }
 
-    // Paginate through /v1/history and count TTS requests in the last 2 days.
-    // Also sums character_count for "today" bucket so we can show per-day chars
-    // (more useful than cycle total for bursty voice-game workloads).
+    // Rich ElevenLabs history aggregate: 2-day request counts + today's
+    // hourly distribution + per-voice breakdown + character statistics, so
+    // the drawer can render a monitoring view useful for:
+    //   - kid's TTS game (which voice/animal is popular right now)
+    //   - detecting credential leak / abuse bursts (off-hours spikes,
+    //     abnormally long per-request chars, concentration on one voice)
+    struct ElevenHistory {
+        var today: Int = 0
+        var yesterday: Int = 0
+        var charsToday: Int = 0
+        var hourBuckets: [Int] = Array(repeating: 0, count: 24)   // reqs per local hour today
+        var charBuckets: [Int] = Array(repeating: 0, count: 24)   // chars per local hour today
+        var byVoice: [String: (reqs: Int, chars: Int)] = [:]      // today only
+        var maxCharsInSingleReq: Int = 0
+        var charSamplesToday: [Int] = []                          // for stddev / histogram
+    }
+
     private func fetchRequestCounts(key: String,
                                     todayStart: Int,
-                                    yesterdayStart: Int) async throws -> (today: Int, yesterday: Int, charsToday: Int) {
-        var today = 0
-        var yesterday = 0
-        var charsToday = 0
+                                    yesterdayStart: Int) async throws -> ElevenHistory {
+        var h = ElevenHistory()
         var startAfter: String? = nil
+        let cal = Calendar.current
         for _ in 0..<5 {   // hard cap: 5 pages × 1000 = 5000 items
             var urlStr = "https://api.elevenlabs.io/v1/history?page_size=1000"
             if let sa = startAfter {
@@ -135,14 +191,30 @@ final class ElevenLabsProvider: UsageProvider {
             var hitOld = false
             for item in items {
                 guard let ts = item["date_unix"] as? Int else { continue }
+                let chars: Int
+                if let from = item["character_count_change_from"] as? Int,
+                   let to = item["character_count_change_to"] as? Int {
+                    chars = max(0, to - from)
+                } else {
+                    chars = 0
+                }
                 if ts >= todayStart {
-                    today += 1
-                    if let from = item["character_count_change_from"] as? Int,
-                       let to = item["character_count_change_to"] as? Int {
-                        charsToday += max(0, to - from)
+                    h.today += 1
+                    h.charsToday += chars
+                    let hour = cal.component(.hour, from: Date(timeIntervalSince1970: TimeInterval(ts)))
+                    if hour >= 0 && hour < 24 {
+                        h.hourBuckets[hour] += 1
+                        h.charBuckets[hour] += chars
                     }
+                    if chars > h.maxCharsInSingleReq { h.maxCharsInSingleReq = chars }
+                    if chars > 0 { h.charSamplesToday.append(chars) }
+                    let voice = (item["voice_name"] as? String) ?? "Unknown"
+                    var v = h.byVoice[voice, default: (0, 0)]
+                    v.reqs += 1
+                    v.chars += chars
+                    h.byVoice[voice] = v
                 } else if ts >= yesterdayStart {
-                    yesterday += 1
+                    h.yesterday += 1
                 } else {
                     hitOld = true
                 }
@@ -152,7 +224,7 @@ final class ElevenLabsProvider: UsageProvider {
             guard let next = obj["last_history_item_id"] as? String, !next.isEmpty else { break }
             startAfter = next
         }
-        return (today, yesterday, charsToday)
+        return h
     }
 }
 
@@ -172,30 +244,55 @@ final class OpenRouterProvider: UsageProvider {
             let headline = String(format: "$%.2f", remaining)
             let spend = String(format: "$%.2f spent", c.total_usage)
 
-            // Top models over the last 7 days, best-effort. This endpoint needs
-            // additional OAuth scopes in some accounts — failure is silent, the
-            // card still shows credits.
-            var topModels: [[String: Any]] = []
-            if let activity = try? await fetchActivity(key: key) {
-                topModels = activity.prefix(3).map { entry in
-                    [
-                        "name":   entry.name,
-                        "spend":  String(format: "$%.2f", entry.spend),
-                        "reqs":   entry.requests,
-                    ]
-                }
+            // Activity: per-model breakdown + today/7-day spend and reqs.
+            // The endpoint may 404 on some accounts — we silently skip.
+            let activity = (try? await fetchActivity(key: key)) ?? ActivityAggregate()
+            // Full per-model list (drawer shows up to 8); card still uses top 3.
+            let topModels: [[String: Any]] = activity.byModel.prefix(3).map { entry in
+                [
+                    "name":  entry.name,
+                    "spend": String(format: "$%.2f", entry.spend),
+                    "reqs":  entry.requests,
+                ]
             }
+            let modelsAll: [[String: Any]] = activity.byModel.prefix(8).map { entry in
+                [
+                    "name":     entry.name,
+                    "spend":    String(format: "$%.2f", entry.spend),
+                    "spendUsd": entry.spend,
+                    "reqs":     entry.requests,
+                ]
+            }
+
+            // Burn rate math — only meaningful if activity responded.
+            let burnPerDay = activity.totalSpend7d / 7.0
+            let daysLeft: Int? = burnPerDay > 0.001
+                ? Int((remaining / burnPerDay).rounded(.down))
+                : nil
 
             var extras: [String: String] = [
                 "credits": headline,
                 "spendLabel": spend,
                 "spendUsd": String(c.total_usage),
                 "creditsUsd": String(remaining),
+                "spendToday":   String(format: "$%.2f", activity.spendToday),
+                "reqsToday":    "\(activity.reqsToday)",
+                "spend7d":      String(format: "$%.2f", activity.totalSpend7d),
+                "reqs7d":       "\(activity.totalReqs7d)",
+                "burnPerDay":   String(format: "$%.2f", burnPerDay),
             ]
+            if let daysLeft = daysLeft {
+                extras["daysLeft"] = "\(daysLeft)"
+            }
             if !topModels.isEmpty,
                let data = try? JSONSerialization.data(withJSONObject: topModels),
                let s = String(data: data, encoding: .utf8) {
                 extras["topModels"] = s
+            }
+            if !modelsAll.isEmpty,
+               let data = try? JSONSerialization.data(withJSONObject: modelsAll),
+               let s = String(data: data, encoding: .utf8) {
+                extras["allModels"] = s
             }
 
             return ProviderSnapshot(
@@ -252,18 +349,28 @@ final class OpenRouterProvider: UsageProvider {
         var spend: Double
         var requests: Int
     }
+    struct ActivityAggregate {
+        var byModel: [ActivityEntry] = []
+        var totalSpend7d: Double = 0
+        var totalReqs7d: Int = 0
+        var spendToday: Double = 0
+        var reqsToday: Int = 0
+    }
 
-    private func fetchActivity(key: String) async throws -> [ActivityEntry] {
+    private func fetchActivity(key: String) async throws -> ActivityAggregate {
         let data = try await APIClient.shared.getData(
             url: URL(string: "https://openrouter.ai/api/v1/activity")!,
             headers: ["Authorization": "Bearer \(key)"]
         )
         guard let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let rows = obj["data"] as? [[String: Any]] else { return [] }
+              let rows = obj["data"] as? [[String: Any]] else { return ActivityAggregate() }
 
-        let cutoff = Calendar.current.date(byAdding: .day, value: -7, to: Date()) ?? Date()
+        let cal = Calendar.current
+        let startOfToday = cal.startOfDay(for: Date())
+        let cutoff = cal.date(byAdding: .day, value: -7, to: Date()) ?? Date()
         let iso = ISO8601DateFormatter()
 
+        var agg = ActivityAggregate()
         var byModel: [String: ActivityEntry] = [:]
         for row in rows {
             // Accept either "date" (YYYY-MM-DD) or "timestamp".
@@ -289,8 +396,16 @@ final class OpenRouterProvider: UsageProvider {
             e.spend += spend
             e.requests += reqs
             byModel[model] = e
+
+            agg.totalSpend7d += spend
+            agg.totalReqs7d += reqs
+            if let d, cal.isDate(d, inSameDayAs: startOfToday) {
+                agg.spendToday += spend
+                agg.reqsToday += reqs
+            }
         }
-        return byModel.values.sorted { $0.spend > $1.spend }
+        agg.byModel = byModel.values.sorted { $0.spend > $1.spend }
+        return agg
     }
 
     private static func prettyModel(_ raw: String) -> String {

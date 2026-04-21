@@ -192,11 +192,19 @@ extension DataStore {
                 if !nums.isEmpty { out["history7"] = nums }
             case "historyMax":
                 if let n = Double(v) { out["historyMax"] = n }
-            case "topModels", "topProjects":
+            case "topModels", "topProjects", "topVoices", "allModels":
                 if let data = v.data(using: .utf8),
                    let arr = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] {
                     out[k] = arr
                 }
+            case "hourBucketsReqs", "hourBucketsChars":
+                let nums = v.split(separator: ",").compactMap { Int($0) }
+                if !nums.isEmpty { out[k] = nums }
+            case "anomalyHour", "anomalyHourReqs",
+                 "peakHourIdx", "peakHourReqs",
+                 "avgChars", "maxCharsReq",
+                 "reqsToday", "reqs7d", "daysLeft":
+                if let n = Int(v) { out[k] = n } else { out[k] = v }
             default:
                 out[k] = v
             }

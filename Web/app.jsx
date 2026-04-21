@@ -1125,7 +1125,10 @@ function InlineBar({ pct, t, width = 40 }) {
 
 function VD2_Eleven({ t, d }) {
   const [hover, setHover] = React.useState(false);
+  const [expanded, setExpanded] = React.useState(false);
   const dark = t.ink === VD2_DARK.ink;
+  const hasDetail = (d.hourBucketsReqs && d.hourBucketsReqs.length > 0)
+                 || (d.topVoices && d.topVoices.length > 0);
   // Unconfigured / error → fall back to simple row
   if (d.pct == null) {
     return (
@@ -1146,6 +1149,7 @@ function VD2_Eleven({ t, d }) {
     <div
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
+      onClick={() => hasDetail && setExpanded(e => !e)}
       style={{
         background: hover ? t.surface : t.compactBg,
         border: `1px solid ${hover ? t.border : (dark ? 'rgba(237,230,214,0.06)' : 'rgba(60,45,30,0.04)')}`,
@@ -1153,6 +1157,7 @@ function VD2_Eleven({ t, d }) {
         boxShadow: hover ? '0 4px 10px rgba(60,45,30,0.07)' : 'none',
         transform: hover ? 'translateY(-1px)' : 'none',
         transition: 'all 160ms ease',
+        cursor: hasDetail ? 'pointer' : 'default',
       }}>
       {/* Header row */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 10 }}>
@@ -1221,6 +1226,162 @@ function VD2_Eleven({ t, d }) {
           <TrendChip label={d.historyTrend} t={t} />
         </div>
       )}
+
+      {expanded && <VD2_ElevenDrawer t={t} d={d} />}
+    </div>
+  );
+}
+
+// Drawer: today's TTS usage patterns + abuse/attack indicators.
+// Built for the "monitor my kid's English TTS game" use case — shows which
+// voices (animals) are popular, hour-by-hour request flow, and a flag when
+// traffic concentrates in an unusual hour or a single request runs long.
+function VD2_ElevenDrawer({ t, d }) {
+  const dark = t.ink === VD2_DARK.ink;
+  const color = dark ? TD.dGold : '#C89464';
+  const buckets = d.hourBucketsReqs || [];
+  const maxBucket = buckets.length ? Math.max(1, ...buckets) : 1;
+  const peakIdx = typeof d.peakHourIdx === 'number' ? d.peakHourIdx : null;
+  const anomalyIdx = typeof d.anomalyHour === 'number' ? d.anomalyHour : null;
+  const avgChars = typeof d.avgChars === 'number' ? d.avgChars : null;
+  const maxChars = typeof d.maxCharsReq === 'number' ? d.maxCharsReq : null;
+  const topVoices = d.topVoices || [];
+  const fmtHour = (h) => {
+    h = ((h % 24) + 24) % 24;
+    if (h === 0) return '12a'; if (h === 12) return '12p';
+    return h < 12 ? `${h}a` : `${h - 12}p`;
+  };
+  const fmtInt = (n) => n == null ? '—' : Number(n).toLocaleString();
+  const fmtChars = (n) => {
+    if (n == null) return '—';
+    if (n < 1000) return `${n}`;
+    if (n < 1_000_000) return `${(n / 1000).toFixed(1)}K`;
+    return `${(n / 1_000_000).toFixed(2)}M`;
+  };
+
+  const warnTextColor = dark ? '#E5A873' : '#B46B2F';
+  const warnBg = dark ? 'rgba(196,136,114,0.12)' : 'rgba(180,107,47,0.08)';
+
+  return (
+    <div
+      onClick={(e) => e.stopPropagation()}
+      style={{ marginTop: 12, paddingTop: 12, borderTop: `1px solid ${t.hair}` }}>
+
+      {/* Today tile row */}
+      <div style={{
+        display: 'grid', gridTemplateColumns: '1fr 1fr 1fr',
+        gap: 8, marginBottom: 10,
+      }}>
+        {[
+          { k: 'Reqs today', v: fmtInt(d.reqsToday) },
+          { k: 'Avg chars/req', v: fmtInt(avgChars) },
+          { k: 'Longest req', v: fmtChars(maxChars) },
+        ].map((x, i) => (
+          <div key={i} style={{
+            background: t.compactBg, border: `1px solid ${t.hair}`,
+            borderRadius: 6, padding: '6px 8px',
+          }}>
+            <div style={{
+              fontFamily: TD_FONTS.serif, fontStyle: 'italic',
+              fontSize: 9.5, color: t.dim, marginBottom: 2,
+            }}>{x.k}</div>
+            <div style={{
+              fontFamily: TD_FONTS.mono, fontSize: 13, color: t.ink,
+              fontVariantNumeric: 'tabular-nums',
+            }}>{x.v}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* 24-hour pattern today */}
+      {buckets.length === 24 && (
+        <div style={{ marginBottom: 10 }}>
+          <div style={{
+            fontFamily: TD_FONTS.serif, fontStyle: 'italic', fontSize: 11.5, color: t.ink,
+            marginBottom: 2,
+          }}>Hourly pattern today</div>
+          <div style={{
+            fontFamily: TD_FONTS.serif, fontStyle: 'italic', fontSize: 10, color: t.dim,
+            marginBottom: 6,
+          }}>local hours · taller = more TTS requests</div>
+          <div style={{
+            display: 'grid', gridTemplateColumns: 'repeat(24, 1fr)',
+            gap: 2, alignItems: 'end', height: 38,
+          }}>
+            {buckets.map((n, i) => {
+              const h = Math.max(2, (n / maxBucket) * 38);
+              const isAnomaly = anomalyIdx === i;
+              const isPeak = peakIdx === i;
+              return (
+                <div key={i} title={`${fmtHour(i)} — ${n} reqs`} style={{
+                  height: `${h}px`,
+                  background: isAnomaly ? (dark ? '#D07565' : '#B44A3A')
+                    : isPeak ? color
+                    : (n === 0 ? t.hair : (dark ? '#6B6057' : '#D4C4A8')),
+                  borderRadius: 1,
+                }} />
+              );
+            })}
+          </div>
+          <div style={{
+            display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)',
+            marginTop: 4, fontFamily: TD_FONTS.serif, fontStyle: 'italic',
+            fontSize: 9, color: t.dim, textAlign: 'center',
+          }}>
+            <span style={{ textAlign: 'left' }}>12a</span>
+            <span>6a</span>
+            <span>12p</span>
+            <span style={{ textAlign: 'right' }}>6p</span>
+          </div>
+        </div>
+      )}
+
+      {/* Anomaly banner */}
+      {anomalyIdx !== null && (
+        <div style={{
+          marginBottom: 10, padding: '8px 10px',
+          background: warnBg, border: `1px solid ${warnTextColor}40`,
+          borderRadius: 6,
+          fontFamily: TD_FONTS.serif, fontStyle: 'italic',
+          fontSize: 11, color: warnTextColor, lineHeight: 1.4,
+        }}>
+          <span style={{ fontWeight: 600 }}>Unusual burst</span>{' '}
+          at {fmtHour(anomalyIdx)}: {d.anomalyHourReqs} requests in one hour.
+          {' '}Check if your API key leaked — typical kid-game usage is steady,
+          not bursty.
+        </div>
+      )}
+
+      {/* Top voices today */}
+      {topVoices.length > 0 && (
+        <div>
+          <div style={{
+            fontFamily: TD_FONTS.serif, fontStyle: 'italic', fontSize: 11.5, color: t.ink,
+            marginBottom: 6,
+          }}>Top voices today</div>
+          {topVoices.map((v, i) => (
+            <div key={i} style={{
+              display: 'grid', gridTemplateColumns: '1fr auto auto',
+              columnGap: 8, padding: '4px 0',
+              borderBottom: i < topVoices.length - 1 ? `1px solid ${t.hair}` : 'none',
+              fontSize: 11,
+            }}>
+              <span style={{
+                color: t.ink, fontFamily: TD_FONTS.serif, fontStyle: 'italic',
+                whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+              }}>{v.name}</span>
+              <span style={{
+                fontFamily: TD_FONTS.mono, color: t.muted,
+                fontVariantNumeric: 'tabular-nums',
+              }}>{fmtInt(v.reqs)} reqs</span>
+              <span style={{
+                fontFamily: TD_FONTS.mono, color: t.dim,
+                fontVariantNumeric: 'tabular-nums', minWidth: 56, textAlign: 'right',
+              }}>{fmtChars(v.chars)}</span>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -1285,15 +1446,103 @@ function VD2_Router({ t, d }) {
         </div>
       )}
 
-      {/* Expanded: top models */}
-      {expanded && d.topModels && d.topModels.length > 0 && (
-        <div onClick={(e) => e.stopPropagation()} style={{
-          marginTop: 12, paddingTop: 10, borderTop: `1px solid ${t.hair}`,
+      {/* Expanded: drawer */}
+      {expanded && <VD2_RouterDrawer t={t} d={d} />}
+    </div>
+  );
+}
+
+// Drawer: today's activity + 7-day rollup + per-model breakdown + burn-rate
+// projection. Answers "where is my money going and how long will it last".
+function VD2_RouterDrawer({ t, d }) {
+  const dark = t.ink === VD2_DARK.ink;
+  const models = d.allModels || d.topModels || [];
+  const fmtInt = (n) => n == null ? '—' : Number(n).toLocaleString();
+
+  const tiles = [
+    { k: 'Today',   v: d.spendToday || '$0.00' },
+    { k: 'Reqs today', v: fmtInt(d.reqsToday) },
+    { k: '7-day spend', v: d.spend7d || '$0.00' },
+    { k: '7-day reqs',  v: fmtInt(d.reqs7d) },
+  ];
+
+  return (
+    <div onClick={(e) => e.stopPropagation()} style={{
+      marginTop: 12, paddingTop: 10, borderTop: `1px solid ${t.hair}`,
+    }}>
+      {/* Tiles */}
+      <div style={{
+        display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr',
+        gap: 8, marginBottom: 10,
+      }}>
+        {tiles.map((x, i) => (
+          <div key={i} style={{
+            background: t.compactBg, border: `1px solid ${t.hair}`,
+            borderRadius: 6, padding: '6px 8px',
+          }}>
+            <div style={{
+              fontFamily: TD_FONTS.serif, fontStyle: 'italic',
+              fontSize: 9.5, color: t.dim, marginBottom: 2,
+              whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+            }}>{x.k}</div>
+            <div style={{
+              fontFamily: TD_FONTS.mono, fontSize: 12.5, color: t.ink,
+              fontVariantNumeric: 'tabular-nums',
+            }}>{x.v}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* Burn rate + credits runway */}
+      {d.burnPerDay && (
+        <div style={{
+          marginBottom: 10, paddingBottom: 10,
+          borderBottom: `1px solid ${t.hair}`,
+          fontFamily: TD_FONTS.serif, fontStyle: 'italic',
+          fontSize: 11, color: t.dim, lineHeight: 1.5,
         }}>
+          <span style={{ color: t.ink }}>{d.burnPerDay}/day</span> average
+          over the last 7 days
+          {typeof d.daysLeft === 'number' && (
+            <>
+              {' — '}
+              <span style={{ color: t.ink }}>
+                credits last {d.daysLeft > 365 ? '365+' : d.daysLeft} day{d.daysLeft === 1 ? '' : 's'}
+              </span>
+              {' '}at this pace
+            </>
+          )}
+        </div>
+      )}
+
+      {/* Per-model breakdown — spend + reqs */}
+      {models.length > 0 && (
+        <div>
           <div style={{
-            fontFamily: TD_FONTS.serif, fontStyle: 'italic', fontSize: 11, color: t.ink, marginBottom: 2,
-          }}>Top models (7d)</div>
-          <TopList rows={d.topModels} t={t} valueKey="spend" />
+            fontFamily: TD_FONTS.serif, fontStyle: 'italic', fontSize: 11.5, color: t.ink,
+            marginBottom: 6,
+          }}>Models (last 7 days)</div>
+          {models.map((m, i) => (
+            <div key={i} style={{
+              display: 'grid', gridTemplateColumns: '1fr auto auto',
+              columnGap: 8, padding: '5px 0',
+              borderBottom: i < models.length - 1 ? `1px solid ${t.hair}` : 'none',
+              fontSize: 11,
+            }}>
+              <span style={{
+                color: t.ink, fontFamily: TD_FONTS.serif, fontStyle: 'italic',
+                whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+              }}>{m.name}</span>
+              <span style={{
+                fontFamily: TD_FONTS.mono, color: t.muted,
+                fontVariantNumeric: 'tabular-nums',
+              }}>{fmtInt(m.reqs)} reqs</span>
+              <span style={{
+                fontFamily: TD_FONTS.mono, color: t.ink, fontWeight: 500,
+                fontVariantNumeric: 'tabular-nums', minWidth: 52, textAlign: 'right',
+              }}>{m.spend}</span>
+            </div>
+          ))}
         </div>
       )}
     </div>
