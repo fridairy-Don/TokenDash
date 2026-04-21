@@ -1232,24 +1232,149 @@ function VD2_Eleven({ t, d }) {
   );
 }
 
-// Drawer: today's TTS usage patterns + abuse/attack indicators.
-// Built for the "monitor my kid's English TTS game" use case — shows which
-// voices (animals) are popular, hour-by-hour request flow, and a flag when
-// traffic concentrates in an unusual hour or a single request runs long.
+// ── Shared primitives ───────────────────────────────────────────────────────
+
+// Format seconds as "5m", "1h 12m", etc.
+function fmtDuration(secs) {
+  if (!secs || secs < 60) return `${Math.round(secs || 0)}s`;
+  const m = Math.round(secs / 60);
+  if (m < 60) return `${m}m`;
+  return `${Math.floor(m / 60)}h ${m % 60}m`;
+}
+
+// Compact token formatter for OpenRouter tables.
+function fmtTokensAbbrev(n) {
+  if (!n) return '0';
+  if (n < 1000) return String(n);
+  if (n < 1_000_000) return `${(n / 1000).toFixed(1)}K`;
+  if (n < 1_000_000_000) return `${(n / 1_000_000).toFixed(2)}M`;
+  return `${(n / 1_000_000_000).toFixed(2)}B`;
+}
+
+// A bar chart with a floating tooltip that follows the hovered bar.
+// Designed to work inside tight drawers — the tooltip anchors to the bar's
+// center and is clamped to the chart's horizontal bounds so it never
+// overflows the popover. Vertically, it sits *above* the bar on a small gap
+// so the cursor doesn't occlude it.
+//
+// props:
+//   bars          array of { value: number, color?: string, dim?: bool }
+//   heightPx      bar area height
+//   tooltipLabel  fn(index) → string  (e.g. "Mon · $3.42 · 120 reqs")
+//   axisLabels    optional array of strings rendered below (same slots as bars)
+//   gap           px gap between bars (default 2)
+//   minBarPx      guarantees tiny values stay visible (default 2)
+function HoverBarChart({ t, bars, heightPx = 38, tooltipLabel, axisLabels, gap = 2, minBarPx = 2 }) {
+  const [hoverIdx, setHoverIdx] = React.useState(-1);
+  const ref = React.useRef(null);
+  const [tipLeft, setTipLeft] = React.useState(0);
+  const max = Math.max(1, ...bars.map(b => b.value || 0));
+  const dark = t.ink === VD2_DARK.ink;
+
+  // Compute tooltip x-position (center of hovered bar, clamped to chart).
+  const handleEnter = (e, i) => {
+    setHoverIdx(i);
+    const parent = ref.current;
+    if (!parent) return;
+    const bar = parent.children[0].children[i];
+    if (!bar) return;
+    const pRect = parent.getBoundingClientRect();
+    const bRect = bar.getBoundingClientRect();
+    const center = bRect.left + bRect.width / 2 - pRect.left;
+    setTipLeft(center);
+  };
+
+  return (
+    <div ref={ref} style={{ position: 'relative' }}>
+      <div style={{
+        display: 'grid',
+        gridTemplateColumns: `repeat(${bars.length}, 1fr)`,
+        gap: `${gap}px`, alignItems: 'end', height: heightPx,
+      }}>
+        {bars.map((b, i) => {
+          const val = b.value || 0;
+          const h = val === 0 ? Math.max(1, minBarPx - 1)
+                              : Math.max(minBarPx, (val / max) * heightPx);
+          const bg = val === 0
+            ? t.hair
+            : (b.color || (b.dim ? (dark ? '#6B6057' : '#D4C4A8') : (dark ? TD.dGold : '#C89464')));
+          const isHover = hoverIdx === i;
+          return (
+            <div key={i}
+                 onMouseEnter={(e) => handleEnter(e, i)}
+                 onMouseLeave={() => setHoverIdx(-1)}
+                 style={{
+                   height: `${h}px`, background: bg, borderRadius: 1,
+                   transition: 'opacity 80ms ease',
+                   opacity: hoverIdx >= 0 && !isHover ? 0.55 : 1,
+                   cursor: 'default',
+                 }} />
+          );
+        })}
+      </div>
+
+      {/* Tooltip */}
+      {hoverIdx >= 0 && (
+        <div style={{
+          position: 'absolute',
+          left: 0,
+          bottom: heightPx + 6,
+          width: '100%',
+          pointerEvents: 'none',
+        }}>
+          <div style={{
+            position: 'absolute',
+            left: `${tipLeft}px`,
+            transform: 'translateX(-50%)',
+            background: dark ? '#2B2820' : '#1A1915',
+            color: dark ? '#EDE6D6' : '#FCFBF7',
+            borderRadius: 4, padding: '4px 8px',
+            fontFamily: TD_FONTS.mono, fontSize: 10.5,
+            whiteSpace: 'nowrap',
+            fontVariantNumeric: 'tabular-nums',
+            boxShadow: '0 2px 8px rgba(0,0,0,0.25)',
+          }}>{tooltipLabel(hoverIdx)}</div>
+        </div>
+      )}
+
+      {axisLabels && (
+        <div style={{
+          display: 'grid', gridTemplateColumns: `repeat(${axisLabels.length}, 1fr)`,
+          marginTop: 4, fontFamily: TD_FONTS.serif, fontStyle: 'italic',
+          fontSize: 9, color: t.dim, textAlign: 'center',
+        }}>
+          {axisLabels.map((lb, i) => <span key={i}>{lb}</span>)}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── ElevenLabs drawer ───────────────────────────────────────────────────────
+//
+// Drawer for the "monitor my kid's English TTS game" use case. Leads with
+// parent-oriented screen-time metrics (play sessions + estimated speech
+// minutes), then the raw hourly/request pattern, then abuse-detection
+// banner + voice breakdown.
 function VD2_ElevenDrawer({ t, d }) {
   const dark = t.ink === VD2_DARK.ink;
   const color = dark ? TD.dGold : '#C89464';
-  const buckets = d.hourBucketsReqs || [];
-  const maxBucket = buckets.length ? Math.max(1, ...buckets) : 1;
+  const reqBuckets = d.hourBucketsReqs || [];
+  const charBuckets = d.hourBucketsChars || [];
   const peakIdx = typeof d.peakHourIdx === 'number' ? d.peakHourIdx : null;
   const anomalyIdx = typeof d.anomalyHour === 'number' ? d.anomalyHour : null;
   const avgChars = typeof d.avgChars === 'number' ? d.avgChars : null;
   const maxChars = typeof d.maxCharsReq === 'number' ? d.maxCharsReq : null;
+  const playSessions = typeof d.playSessions === 'number' ? d.playSessions : null;
+  const speechSecs = typeof d.speechSeconds === 'number' ? d.speechSeconds : 0;
+  const longestSec = typeof d.longestSessionSec === 'number' ? d.longestSessionSec : 0;
   const topVoices = d.topVoices || [];
+
   const fmtHour = (h) => {
     h = ((h % 24) + 24) % 24;
-    if (h === 0) return '12a'; if (h === 12) return '12p';
-    return h < 12 ? `${h}a` : `${h - 12}p`;
+    if (h === 0) return '12 AM';
+    if (h === 12) return '12 PM';
+    return h < 12 ? `${h} AM` : `${h - 12} PM`;
   };
   const fmtInt = (n) => n == null ? '—' : Number(n).toLocaleString();
   const fmtChars = (n) => {
@@ -1262,20 +1387,70 @@ function VD2_ElevenDrawer({ t, d }) {
   const warnTextColor = dark ? '#E5A873' : '#B46B2F';
   const warnBg = dark ? 'rgba(196,136,114,0.12)' : 'rgba(180,107,47,0.08)';
 
+  // Hourly bars wired with anomaly / peak coloring.
+  const hourBars = reqBuckets.map((n, i) => ({
+    value: n,
+    color: anomalyIdx === i ? (dark ? '#D07565' : '#B44A3A')
+         : peakIdx === i ? color
+         : undefined,
+    dim: anomalyIdx !== i && peakIdx !== i,
+  }));
+  const hourTooltip = (i) => {
+    const r = reqBuckets[i] || 0;
+    const c = charBuckets[i] || 0;
+    return `${fmtHour(i)} · ${r} req${r === 1 ? '' : 's'} · ${fmtChars(c)} chars`;
+  };
+
   return (
     <div
       onClick={(e) => e.stopPropagation()}
       style={{ marginTop: 12, paddingTop: 12, borderTop: `1px solid ${t.hair}` }}>
 
-      {/* Today tile row */}
+      {/* Screen-time tiles — the metric ElevenLabs' own UI doesn't show */}
+      {playSessions !== null && (
+        <div style={{
+          display: 'grid', gridTemplateColumns: '1fr 1fr 1fr',
+          gap: 8, marginBottom: 10,
+        }}>
+          {[
+            { k: 'Play sessions', v: fmtInt(playSessions),
+              hint: playSessions === 0 ? 'no activity today' : 'today' },
+            { k: 'Speech time',   v: fmtDuration(speechSecs),
+              hint: 'est. audio minutes' },
+            { k: 'Longest session', v: fmtDuration(longestSec),
+              hint: 'uninterrupted' },
+          ].map((x, i) => (
+            <div key={i} style={{
+              background: t.compactBg, border: `1px solid ${t.hair}`,
+              borderRadius: 6, padding: '6px 8px',
+            }}>
+              <div style={{
+                fontFamily: TD_FONTS.serif, fontStyle: 'italic',
+                fontSize: 9.5, color: t.dim, marginBottom: 2,
+                whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+              }}>{x.k}</div>
+              <div style={{
+                fontFamily: TD_FONTS.mono, fontSize: 13, color: t.ink,
+                fontVariantNumeric: 'tabular-nums',
+              }}>{x.v}</div>
+              <div style={{
+                fontFamily: TD_FONTS.serif, fontStyle: 'italic',
+                fontSize: 9, color: t.dim, marginTop: 2,
+              }}>{x.hint}</div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Secondary usage row: raw counts and outlier detection */}
       <div style={{
         display: 'grid', gridTemplateColumns: '1fr 1fr 1fr',
         gap: 8, marginBottom: 10,
       }}>
         {[
-          { k: 'Reqs today', v: fmtInt(d.reqsToday) },
+          { k: 'Reqs today',   v: fmtInt(d.reqsToday) },
           { k: 'Avg chars/req', v: fmtInt(avgChars) },
-          { k: 'Longest req', v: fmtChars(maxChars) },
+          { k: 'Longest req',   v: fmtChars(maxChars) },
         ].map((x, i) => (
           <div key={i} style={{
             background: t.compactBg, border: `1px solid ${t.hair}`,
@@ -1293,53 +1468,35 @@ function VD2_ElevenDrawer({ t, d }) {
         ))}
       </div>
 
-      {/* 24-hour pattern today */}
-      {buckets.length === 24 && (
-        <div style={{ marginBottom: 10 }}>
+      {/* 24-hour pattern today — now with floating tooltip */}
+      {reqBuckets.length === 24 && (
+        <div style={{ marginBottom: 12 }}>
           <div style={{
             fontFamily: TD_FONTS.serif, fontStyle: 'italic', fontSize: 11.5, color: t.ink,
             marginBottom: 2,
           }}>Hourly pattern today</div>
           <div style={{
             fontFamily: TD_FONTS.serif, fontStyle: 'italic', fontSize: 10, color: t.dim,
-            marginBottom: 6,
-          }}>local hours · taller = more TTS requests</div>
-          <div style={{
-            display: 'grid', gridTemplateColumns: 'repeat(24, 1fr)',
-            gap: 2, alignItems: 'end', height: 38,
-          }}>
-            {buckets.map((n, i) => {
-              const h = Math.max(2, (n / maxBucket) * 38);
-              const isAnomaly = anomalyIdx === i;
-              const isPeak = peakIdx === i;
-              return (
-                <div key={i} title={`${fmtHour(i)} — ${n} reqs`} style={{
-                  height: `${h}px`,
-                  background: isAnomaly ? (dark ? '#D07565' : '#B44A3A')
-                    : isPeak ? color
-                    : (n === 0 ? t.hair : (dark ? '#6B6057' : '#D4C4A8')),
-                  borderRadius: 1,
-                }} />
-              );
-            })}
-          </div>
-          <div style={{
-            display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)',
-            marginTop: 4, fontFamily: TD_FONTS.serif, fontStyle: 'italic',
-            fontSize: 9, color: t.dim, textAlign: 'center',
-          }}>
-            <span style={{ textAlign: 'left' }}>12a</span>
-            <span>6a</span>
-            <span>12p</span>
-            <span style={{ textAlign: 'right' }}>6p</span>
-          </div>
+            marginBottom: 8,
+          }}>hover a bar for exact counts</div>
+          <HoverBarChart
+            t={t}
+            bars={hourBars}
+            heightPx={38}
+            gap={2}
+            tooltipLabel={hourTooltip}
+            axisLabels={['12a', '6a', '12p', '6p'].flatMap((s, i) =>
+              // 4 labels spread across 24 slots
+              [s, ...(i < 3 ? ['', '', '', '', ''] : [])]
+            ).slice(0, 24)}
+          />
         </div>
       )}
 
       {/* Anomaly banner */}
       {anomalyIdx !== null && (
         <div style={{
-          marginBottom: 10, padding: '8px 10px',
+          marginBottom: 12, padding: '8px 10px',
           background: warnBg, border: `1px solid ${warnTextColor}40`,
           borderRadius: 6,
           fontFamily: TD_FONTS.serif, fontStyle: 'italic',
@@ -1463,25 +1620,78 @@ function VD2_Router({ t, d }) {
   );
 }
 
-// Drawer: today's activity + 7-day rollup + per-model breakdown + burn-rate
-// projection. Answers "where is my money going and how long will it last".
+// ── OpenRouter drawer ───────────────────────────────────────────────────────
+//
+// Three tabs mirror the Claude Code drawer pattern and OpenRouter's own web
+// UI vocabulary. Overview for the at-a-glance picture, Models for cost
+// efficiency comparison ($/1M tokens across models), Activity for daily
+// spend breakdown with hover tooltips.
 function VD2_RouterDrawer({ t, d }) {
-  const dark = t.ink === VD2_DARK.ink;
-  const models = d.allModels || d.topModels || [];
+  const [tab, setTab] = React.useState('overview');
   const fmtInt = (n) => n == null ? '—' : Number(n).toLocaleString();
+  const fmtUsd = (n) => `$${(n || 0).toFixed(2)}`;
 
-  const tiles = [
-    { k: 'Today',   v: d.spendToday || '$0.00' },
-    { k: 'Reqs today', v: fmtInt(d.reqsToday) },
-    { k: '7-day spend', v: d.spend7d || '$0.00' },
-    { k: '7-day reqs',  v: fmtInt(d.reqs7d) },
+  const tabs = [
+    { id: 'overview', label: 'Overview' },
+    { id: 'models',   label: 'Models'   },
+    { id: 'activity', label: 'Activity' },
   ];
 
   return (
     <div onClick={(e) => e.stopPropagation()} style={{
       marginTop: 12, paddingTop: 10, borderTop: `1px solid ${t.hair}`,
     }}>
-      {/* Tiles */}
+      {/* Tab bar (same primitive as Claude drawer) */}
+      <div style={{
+        display: 'inline-flex', gap: 4, marginBottom: 12,
+        background: t.compactBg, borderRadius: 8, padding: 3,
+        border: `1px solid ${t.hair}`,
+      }}>
+        {tabs.map(x => (
+          <button
+            key={x.id}
+            onClick={() => setTab(x.id)}
+            style={{
+              appearance: 'none', border: 'none', cursor: 'pointer',
+              background: tab === x.id ? t.surface : 'transparent',
+              color: tab === x.id ? t.ink : t.muted,
+              fontFamily: TD_FONTS.sans, fontSize: 11.5,
+              fontWeight: tab === x.id ? 600 : 400,
+              padding: '3px 10px', borderRadius: 6,
+              boxShadow: tab === x.id ? '0 1px 2px rgba(0,0,0,0.08)' : 'none',
+              transition: 'background 120ms ease',
+            }}
+          >{x.label}</button>
+        ))}
+      </div>
+
+      {tab === 'overview' && <RouterOverviewTab t={t} d={d} fmtInt={fmtInt} />}
+      {tab === 'models'   && <RouterModelsTab   t={t} d={d} fmtInt={fmtInt} fmtUsd={fmtUsd} />}
+      {tab === 'activity' && <RouterActivityTab t={t} d={d} fmtInt={fmtInt} fmtUsd={fmtUsd} />}
+    </div>
+  );
+}
+
+// Overview — today / 7d numbers + burn rate + sparkline with tooltips.
+function RouterOverviewTab({ t, d, fmtInt }) {
+  const dark = t.ink === VD2_DARK.ink;
+  const daily = d.dailySpend || [];
+  const tiles = [
+    { k: 'Today',       v: d.spendToday || '$0.00' },
+    { k: 'Reqs today',  v: fmtInt(d.reqsToday) },
+    { k: '7-day spend', v: d.spend7d || '$0.00' },
+    { k: '7-day reqs',  v: fmtInt(d.reqs7d) },
+  ];
+  const bars = daily.map((dpt) => ({ value: dpt.spend || 0 }));
+  const tipFor = (i) => {
+    const dpt = daily[i];
+    if (!dpt) return '';
+    return `${dpt.label} · $${(dpt.spend || 0).toFixed(2)} · ${dpt.reqs || 0} reqs`;
+  };
+  const axis = daily.map(d => d.label.split(' ')[1]);   // e.g. "15" from "Apr 15"
+
+  return (
+    <div>
       <div style={{
         display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr',
         gap: 8, marginBottom: 10,
@@ -1504,10 +1714,10 @@ function VD2_RouterDrawer({ t, d }) {
         ))}
       </div>
 
-      {/* Burn rate + credits runway */}
+      {/* Burn rate + runway */}
       {d.burnPerDay && (
         <div style={{
-          marginBottom: 10, paddingBottom: 10,
+          marginBottom: 12, paddingBottom: 10,
           borderBottom: `1px solid ${t.hair}`,
           fontFamily: TD_FONTS.serif, fontStyle: 'italic',
           fontSize: 11, color: t.dim, lineHeight: 1.5,
@@ -1526,34 +1736,203 @@ function VD2_RouterDrawer({ t, d }) {
         </div>
       )}
 
-      {/* Per-model breakdown — spend + reqs */}
-      {models.length > 0 && (
+      {/* 7-day spend chart */}
+      {bars.length > 0 && (
         <div>
           <div style={{
             fontFamily: TD_FONTS.serif, fontStyle: 'italic', fontSize: 11.5, color: t.ink,
-            marginBottom: 6,
-          }}>Models (last 7 days)</div>
-          {models.map((m, i) => (
-            <div key={i} style={{
-              display: 'grid', gridTemplateColumns: '1fr auto auto',
-              columnGap: 8, padding: '5px 0',
-              borderBottom: i < models.length - 1 ? `1px solid ${t.hair}` : 'none',
-              fontSize: 11,
-            }}>
-              <span style={{
-                color: t.ink, fontFamily: TD_FONTS.serif, fontStyle: 'italic',
-                whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
-              }}>{m.name}</span>
+            marginBottom: 2,
+          }}>Spend last 7 days</div>
+          <div style={{
+            fontFamily: TD_FONTS.serif, fontStyle: 'italic', fontSize: 10, color: t.dim,
+            marginBottom: 8,
+          }}>hover a bar for exact $ + request count</div>
+          <HoverBarChart
+            t={t}
+            bars={bars.map(b => ({ ...b, color: dark ? TD.dCoral : TD.coral }))}
+            heightPx={42}
+            gap={4}
+            tooltipLabel={tipFor}
+            axisLabels={axis}
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Models — sortable-feeling table: name, reqs, total tokens, $/req, total $,
+// with an extra "$/1M tokens" column exposing which model is cheapest on
+// this specific workload. That's the number that actually matters for
+// optimizing spend; a $10/M model that batches well can beat a $5/M model
+// that needs more round-trips.
+function RouterModelsTab({ t, d, fmtInt, fmtUsd }) {
+  const models = d.allModels || d.topModels || [];
+  if (models.length === 0) {
+    return (
+      <div style={{
+        fontFamily: TD_FONTS.serif, fontStyle: 'italic', fontSize: 11, color: t.dim,
+      }}>No model activity recorded in the last 7 days.</div>
+    );
+  }
+  // Is the activity endpoint providing token counts? If not, we hide the
+  // token-based columns rather than show a row of zeros.
+  const hasTokens = models.some(m => (m.totalTokens || 0) > 0);
+
+  return (
+    <div>
+      <div style={{
+        fontFamily: TD_FONTS.serif, fontStyle: 'italic', fontSize: 11.5, color: t.ink,
+        marginBottom: 2,
+      }}>Models (last 7 days)</div>
+      <div style={{
+        fontFamily: TD_FONTS.serif, fontStyle: 'italic', fontSize: 10, color: t.dim,
+        marginBottom: 6,
+      }}>sorted by spend · $/1M shows cost efficiency</div>
+
+      {/* Header row */}
+      <div style={{
+        display: 'grid',
+        gridTemplateColumns: hasTokens ? '1fr 52px 70px 70px 60px' : '1fr 60px 70px 70px',
+        columnGap: 6, padding: '4px 0',
+        borderBottom: `1px solid ${t.hair}`,
+        fontFamily: TD_FONTS.serif, fontStyle: 'italic',
+        fontSize: 9.5, color: t.dim,
+      }}>
+        <span>Model</span>
+        <span style={{ textAlign: 'right' }}>Reqs</span>
+        {hasTokens && <span style={{ textAlign: 'right' }}>Tokens</span>}
+        <span style={{ textAlign: 'right' }}>{hasTokens ? '$ / 1M' : '$ / req'}</span>
+        <span style={{ textAlign: 'right' }}>Spend</span>
+      </div>
+
+      {models.map((m, i) => {
+        const reqs = m.reqs || 0;
+        const tokens = m.totalTokens || 0;
+        const avgPerReq = m.avgPerReq || 0;
+        const perMillion = m.perMillion || 0;
+        return (
+          <div key={i} style={{
+            display: 'grid',
+            gridTemplateColumns: hasTokens ? '1fr 52px 70px 70px 60px' : '1fr 60px 70px 70px',
+            columnGap: 6, padding: '5px 0', alignItems: 'baseline',
+            borderBottom: i < models.length - 1 ? `1px solid ${t.hair}` : 'none',
+            fontSize: 11,
+          }}>
+            <span style={{
+              color: t.ink, fontFamily: TD_FONTS.serif, fontStyle: 'italic',
+              whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+            }}>{m.name}</span>
+            <span style={{
+              fontFamily: TD_FONTS.mono, color: t.muted,
+              fontVariantNumeric: 'tabular-nums', textAlign: 'right',
+            }}>{fmtInt(reqs)}</span>
+            {hasTokens && (
               <span style={{
                 fontFamily: TD_FONTS.mono, color: t.muted,
-                fontVariantNumeric: 'tabular-nums',
-              }}>{fmtInt(m.reqs)} reqs</span>
-              <span style={{
-                fontFamily: TD_FONTS.mono, color: t.ink, fontWeight: 500,
-                fontVariantNumeric: 'tabular-nums', minWidth: 52, textAlign: 'right',
-              }}>{m.spend}</span>
-            </div>
-          ))}
+                fontVariantNumeric: 'tabular-nums', textAlign: 'right',
+              }}>{fmtTokensAbbrev(tokens)}</span>
+            )}
+            <span style={{
+              fontFamily: TD_FONTS.mono, color: t.muted,
+              fontVariantNumeric: 'tabular-nums', textAlign: 'right',
+            }}>{hasTokens ? fmtUsd(perMillion) : fmtUsd(avgPerReq)}</span>
+            <span style={{
+              fontFamily: TD_FONTS.mono, color: t.ink, fontWeight: 500,
+              fontVariantNumeric: 'tabular-nums', textAlign: 'right',
+            }}>{m.spend}</span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// Activity — daily spend bars (larger) + insight callout "biggest day".
+function RouterActivityTab({ t, d, fmtInt, fmtUsd }) {
+  const dark = t.ink === VD2_DARK.ink;
+  const daily = d.dailySpend || [];
+  if (daily.length === 0) {
+    return (
+      <div style={{
+        fontFamily: TD_FONTS.serif, fontStyle: 'italic', fontSize: 11, color: t.dim,
+      }}>No daily activity data available (OpenRouter /v1/activity may be unavailable on this account).</div>
+    );
+  }
+  const bars = daily.map(dpt => ({ value: dpt.spend || 0 }));
+  const tipFor = (i) => {
+    const dpt = daily[i];
+    if (!dpt) return '';
+    return `${dpt.label} · $${(dpt.spend || 0).toFixed(2)} · ${dpt.reqs || 0} reqs`;
+  };
+  const axis = daily.map(d => d.label);
+
+  const promptTokens = d.promptTokens7d || 0;
+  const completionTokens = d.completionTokens7d || 0;
+
+  return (
+    <div>
+      {d.biggestDayLabel && (
+        <div style={{
+          marginBottom: 12,
+          fontFamily: TD_FONTS.serif, fontStyle: 'italic',
+          fontSize: 11, color: t.dim, lineHeight: 1.5,
+        }}>
+          <span style={{ color: t.ink, fontWeight: 600 }}>Biggest day:</span>{' '}
+          {d.biggestDayLabel} — {d.biggestDaySpend}
+        </div>
+      )}
+
+      <div style={{
+        fontFamily: TD_FONTS.serif, fontStyle: 'italic', fontSize: 11.5, color: t.ink,
+        marginBottom: 2,
+      }}>Daily spend</div>
+      <div style={{
+        fontFamily: TD_FONTS.serif, fontStyle: 'italic', fontSize: 10, color: t.dim,
+        marginBottom: 8,
+      }}>hover a bar for detail</div>
+      <HoverBarChart
+        t={t}
+        bars={bars.map(b => ({ ...b, color: dark ? TD.dCoral : TD.coral }))}
+        heightPx={56}
+        gap={6}
+        tooltipLabel={tipFor}
+        axisLabels={axis}
+      />
+
+      {(promptTokens > 0 || completionTokens > 0) && (
+        <div style={{
+          marginTop: 14, paddingTop: 10,
+          borderTop: `1px solid ${t.hair}`,
+          display: 'grid', gridTemplateColumns: '1fr 1fr',
+          gap: 8,
+        }}>
+          <div style={{
+            background: t.compactBg, border: `1px solid ${t.hair}`,
+            borderRadius: 6, padding: '6px 8px',
+          }}>
+            <div style={{
+              fontFamily: TD_FONTS.serif, fontStyle: 'italic',
+              fontSize: 9.5, color: t.dim, marginBottom: 2,
+            }}>Prompt tokens (7d)</div>
+            <div style={{
+              fontFamily: TD_FONTS.mono, fontSize: 13, color: t.ink,
+              fontVariantNumeric: 'tabular-nums',
+            }}>{fmtTokensAbbrev(promptTokens)}</div>
+          </div>
+          <div style={{
+            background: t.compactBg, border: `1px solid ${t.hair}`,
+            borderRadius: 6, padding: '6px 8px',
+          }}>
+            <div style={{
+              fontFamily: TD_FONTS.serif, fontStyle: 'italic',
+              fontSize: 9.5, color: t.dim, marginBottom: 2,
+            }}>Completion tokens (7d)</div>
+            <div style={{
+              fontFamily: TD_FONTS.mono, fontSize: 13, color: t.ink,
+              fontVariantNumeric: 'tabular-nums',
+            }}>{fmtTokensAbbrev(completionTokens)}</div>
+          </div>
         </div>
       )}
     </div>

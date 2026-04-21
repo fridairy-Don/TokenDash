@@ -79,6 +79,34 @@ final class ElevenLabsProvider: UsageProvider {
                     ]
                 }
 
+            // --- Play session clustering --------------------------------
+            // For a kid's TTS game, "a session" is a stretch of back-to-back
+            // requests. Gaps ≥ 5 minutes start a new session. Gives parents
+            // a "screen time" view they can't get from ElevenLabs' own UI.
+            let gapSeconds = 5 * 60
+            let sortedTs = h.todayTimestamps.sorted()
+            var sessionCount = 0
+            var sessionDurations: [Int] = []   // seconds
+            if !sortedTs.isEmpty {
+                sessionCount = 1
+                var sessionStart = sortedTs[0]
+                var prev = sortedTs[0]
+                for ts in sortedTs.dropFirst() {
+                    if ts - prev >= gapSeconds {
+                        sessionDurations.append(prev - sessionStart)
+                        sessionCount += 1
+                        sessionStart = ts
+                    }
+                    prev = ts
+                }
+                sessionDurations.append(prev - sessionStart)
+            }
+            let longestSessionSec = sessionDurations.max() ?? 0
+            // Speech time estimate: ElevenLabs voices average ~14 chars/sec
+            // at natural cadence. That's a rough-but-useful approximation
+            // for "how many minutes of audio did the kid listen to today".
+            let speechSeconds = h.charsToday / 14
+
             var extras: [String: String] = [
                 "pct": "\(pct)",
                 "usedLabel": used_s,
@@ -100,6 +128,10 @@ final class ElevenLabsProvider: UsageProvider {
                 extras["anomalyHour"] = "\(anomalyHour)"
                 extras["anomalyHourReqs"] = "\(maxHour)"
             }
+            // Play-session metrics (screen-time view for the kid-game use case)
+            extras["playSessions"]      = "\(sessionCount)"
+            extras["speechSeconds"]     = "\(speechSeconds)"
+            extras["longestSessionSec"] = "\(longestSessionSec)"
             // Hour bucket arrays as CSV — DataStore+TDData expands to real JS arrays.
             extras["hourBucketsReqs"]  = h.hourBuckets.map(String.init).joined(separator: ",")
             extras["hourBucketsChars"] = h.charBuckets.map(String.init).joined(separator: ",")
@@ -171,6 +203,7 @@ final class ElevenLabsProvider: UsageProvider {
         var byVoice: [String: (reqs: Int, chars: Int)] = [:]      // today only
         var maxCharsInSingleReq: Int = 0
         var charSamplesToday: [Int] = []                          // for stddev / histogram
+        var todayTimestamps: [Int] = []                           // unix seconds, for session clustering
     }
 
     private func fetchRequestCounts(key: String,
@@ -201,6 +234,7 @@ final class ElevenLabsProvider: UsageProvider {
                 if ts >= todayStart {
                     h.today += 1
                     h.charsToday += chars
+                    h.todayTimestamps.append(ts)
                     let hour = cal.component(.hour, from: Date(timeIntervalSince1970: TimeInterval(ts)))
                     if hour >= 0 && hour < 24 {
                         h.hourBuckets[hour] += 1
@@ -255,12 +289,36 @@ final class OpenRouterProvider: UsageProvider {
                     "reqs":  entry.requests,
                 ]
             }
-            let modelsAll: [[String: Any]] = activity.byModel.prefix(8).map { entry in
+            let modelsAll: [[String: Any]] = activity.byModel.prefix(8).map { entry -> [String: Any] in
+                let totalTokens = entry.promptTokens + entry.completionTokens
+                let avgPerReq = entry.requests > 0 ? entry.spend / Double(entry.requests) : 0
+                // Dollars per million tokens — the apples-to-apples "which
+                // model is the cheapest on this workload" metric.
+                let perMillion: Double = totalTokens > 0
+                    ? entry.spend / (Double(totalTokens) / 1_000_000.0)
+                    : 0
+                return [
+                    "name":         entry.name,
+                    "spend":        String(format: "$%.2f", entry.spend),
+                    "spendUsd":     entry.spend,
+                    "reqs":         entry.requests,
+                    "promptTokens": entry.promptTokens,
+                    "completionTokens": entry.completionTokens,
+                    "totalTokens":  totalTokens,
+                    "avgPerReq":    avgPerReq,      // raw number; JS formats
+                    "perMillion":   perMillion,     // raw number; JS formats
+                ]
+            }
+            // 7-day daily spend for the Activity tab chart (raw numbers +
+            // ISO date strings; JS side formats).
+            let df = DateFormatter()
+            df.dateFormat = "MMM d"
+            df.locale = Locale(identifier: "en_US_POSIX")
+            let dailySpend: [[String: Any]] = activity.byDay.map { bucket in
                 [
-                    "name":     entry.name,
-                    "spend":    String(format: "$%.2f", entry.spend),
-                    "spendUsd": entry.spend,
-                    "reqs":     entry.requests,
+                    "label": df.string(from: bucket.date),
+                    "spend": bucket.spend,
+                    "reqs":  bucket.requests,
                 ]
             }
 
@@ -306,6 +364,23 @@ final class OpenRouterProvider: UsageProvider {
                let data = try? JSONSerialization.data(withJSONObject: modelsAll),
                let s = String(data: data, encoding: .utf8) {
                 extras["allModels"] = s
+            }
+            // 7-day daily spend buckets
+            if !dailySpend.isEmpty,
+               let data = try? JSONSerialization.data(withJSONObject: dailySpend),
+               let s = String(data: data, encoding: .utf8) {
+                extras["dailySpend"] = s
+            }
+            // 7-day aggregate token totals (across all models)
+            extras["promptTokens7d"] = "\(activity.totalPromptTokens7d)"
+            extras["completionTokens7d"] = "\(activity.totalCompletionTokens7d)"
+            // Biggest-day insight for the Activity tab
+            if let big = activity.biggestDay {
+                let fmt = DateFormatter()
+                fmt.dateFormat = "MMM d"
+                fmt.locale = Locale(identifier: "en_US_POSIX")
+                extras["biggestDayLabel"] = fmt.string(from: big.date)
+                extras["biggestDaySpend"] = String(format: "$%.2f", big.spend)
             }
 
             return ProviderSnapshot(
@@ -354,20 +429,33 @@ final class OpenRouterProvider: UsageProvider {
 
     // MARK: Activity breakdown
 
-    // OpenRouter /api/v1/activity returns per-day rows with model + spend.
-    // We collapse by model over the last 7 days. This endpoint may 404 on
-    // some accounts — that's fine, we treat it as "no breakdown available".
+    // OpenRouter /api/v1/activity returns per-day rows with model + spend +
+    // (sometimes) prompt/completion token counts. We collapse by model and
+    // by day over the last 7 days. The endpoint may 404 on some accounts —
+    // that's fine, we treat it as "no breakdown available".
     struct ActivityEntry {
         var name: String
         var spend: Double
         var requests: Int
+        var promptTokens: Int = 0
+        var completionTokens: Int = 0
+    }
+    struct DayBucket {
+        let date: Date     // start-of-day
+        var spend: Double = 0
+        var requests: Int = 0
     }
     struct ActivityAggregate {
         var byModel: [ActivityEntry] = []
+        var byDay: [DayBucket] = []          // 7 entries, oldest → newest
         var totalSpend7d: Double = 0
         var totalReqs7d: Int = 0
+        var totalPromptTokens7d: Int = 0
+        var totalCompletionTokens7d: Int = 0
         var spendToday: Double = 0
         var reqsToday: Int = 0
+        // Most expensive day in the 7-day window (for the Activity tab insight).
+        var biggestDay: (date: Date, spend: Double)? = nil
     }
 
     private func fetchActivity(key: String) async throws -> ActivityAggregate {
@@ -380,11 +468,13 @@ final class OpenRouterProvider: UsageProvider {
 
         let cal = Calendar.current
         let startOfToday = cal.startOfDay(for: Date())
-        let cutoff = cal.date(byAdding: .day, value: -7, to: Date()) ?? Date()
+        let sevenDaysAgo = cal.date(byAdding: .day, value: -6, to: startOfToday)!
         let iso = ISO8601DateFormatter()
 
         var agg = ActivityAggregate()
         var byModel: [String: ActivityEntry] = [:]
+        var byDayDict: [Date: DayBucket] = [:]
+
         for row in rows {
             // Accept either "date" (YYYY-MM-DD) or "timestamp".
             let dateStr = (row["date"] as? String)
@@ -394,7 +484,9 @@ final class OpenRouterProvider: UsageProvider {
             df.dateFormat = "yyyy-MM-dd"
             df.locale = Locale(identifier: "en_US_POSIX")
             let d = df.date(from: dateStr) ?? iso.date(from: dateStr)
-            if let d, d < cutoff { continue }
+            guard let rowDate = d else { continue }
+            if rowDate < sevenDaysAgo { continue }
+            let dayStart = cal.startOfDay(for: rowDate)
 
             let model = (row["model"] as? String)
                 ?? (row["model_permaslug"] as? String)
@@ -404,20 +496,52 @@ final class OpenRouterProvider: UsageProvider {
                 ?? (row["total_cost"] as? Double)
                 ?? 0
             let reqs = (row["requests"] as? Int) ?? (row["total_requests"] as? Int) ?? 1
+            // Token counts — OpenRouter uses a few field names depending on
+            // endpoint version; try all of them and keep whichever matches.
+            let promptTokens = (row["prompt_tokens"] as? Int)
+                ?? (row["tokens_prompt"] as? Int)
+                ?? (row["input_tokens"] as? Int)
+                ?? 0
+            let completionTokens = (row["completion_tokens"] as? Int)
+                ?? (row["tokens_completion"] as? Int)
+                ?? (row["output_tokens"] as? Int)
+                ?? 0
 
-            var e = byModel[model, default: .init(name: Self.prettyModel(model), spend: 0, requests: 0)]
+            var e = byModel[model, default: .init(name: Self.prettyModel(model),
+                                                  spend: 0, requests: 0)]
             e.spend += spend
             e.requests += reqs
+            e.promptTokens += promptTokens
+            e.completionTokens += completionTokens
             byModel[model] = e
+
+            var bucket = byDayDict[dayStart, default: .init(date: dayStart)]
+            bucket.spend += spend
+            bucket.requests += reqs
+            byDayDict[dayStart] = bucket
 
             agg.totalSpend7d += spend
             agg.totalReqs7d += reqs
-            if let d, cal.isDate(d, inSameDayAs: startOfToday) {
+            agg.totalPromptTokens7d += promptTokens
+            agg.totalCompletionTokens7d += completionTokens
+            if cal.isDate(dayStart, inSameDayAs: startOfToday) {
                 agg.spendToday += spend
                 agg.reqsToday += reqs
             }
         }
         agg.byModel = byModel.values.sorted { $0.spend > $1.spend }
+
+        // Fill in any missing days as zero buckets so the 7-day chart
+        // always has 7 bars (otherwise an idle day disappears).
+        var filledDays: [DayBucket] = []
+        for i in 0..<7 {
+            let d = cal.date(byAdding: .day, value: -(6 - i), to: startOfToday)!
+            filledDays.append(byDayDict[d, default: .init(date: d)])
+        }
+        agg.byDay = filledDays
+        if let biggest = filledDays.max(by: { $0.spend < $1.spend }), biggest.spend > 0 {
+            agg.biggestDay = (date: biggest.date, spend: biggest.spend)
+        }
         return agg
     }
 

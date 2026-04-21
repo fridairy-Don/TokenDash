@@ -192,7 +192,7 @@ extension DataStore {
                 if !nums.isEmpty { out["history7"] = nums }
             case "historyMax":
                 if let n = Double(v) { out["historyMax"] = n }
-            case "topModels", "topProjects", "topVoices", "allModels":
+            case "topModels", "topProjects", "topVoices", "allModels", "dailySpend":
                 if let data = v.data(using: .utf8),
                    let arr = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] {
                     out[k] = arr
@@ -203,7 +203,9 @@ extension DataStore {
             case "anomalyHour", "anomalyHourReqs",
                  "peakHourIdx", "peakHourReqs",
                  "avgChars", "maxCharsReq",
-                 "reqsToday", "reqs7d", "daysLeft":
+                 "reqsToday", "reqs7d", "daysLeft",
+                 "playSessions", "speechSeconds", "longestSessionSec",
+                 "promptTokens7d", "completionTokens7d":
                 if let n = Int(v) { out[k] = n } else { out[k] = v }
             default:
                 out[k] = v
