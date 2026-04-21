@@ -40,24 +40,49 @@ final class ClaudeCodeProvider: UsageProvider {
         var week = TokenTotals()
         var byModelMonth: [String: TokenTotals] = [:]
         var byModelToday: [String: TokenTotals] = [:]
-        var byProjectWeek: [String: TokenTotals] = [:]
+        var byCwdWeek: [String: TokenTotals] = [:]   // real project paths
         var dailyBuckets = Array(repeating: 0, count: 7)   // 0 = 6d ago, 6 = today
         var sessionsToday: [String: SessionAccum] = [:]
         var totalFilesScanned = 0
+
+        // Message counts (any user or assistant turn) — what Claude Code's UI
+        // labels "Messages".
+        var messagesToday = 0
+        var messagesWeek = 0
+        var messagesMonth = 0
+        // Peak hour: histogram of message local-hours over the last 30 days.
+        var hourBuckets = Array(repeating: 0, count: 24)
 
         for url in files {
             if let mod = try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate,
                mod < scanCutoff { continue }
             totalFilesScanned += 1
-            let projectName = Self.projectName(from: url)
-            parseFile(url: url) { ts, model, sessionId, tot in
+            let fallbackName = Self.projectName(from: url)
+            parseFile(url: url) { evt in
+                let ts = evt.ts
+                // --- message counting (both user and assistant lines) ---
+                if ts >= startOfToday { messagesToday += 1 }
+                if ts >= sevenDaysAgo { messagesWeek += 1 }
+                if ts >= startOfMonth { messagesMonth += 1 }
+                // --- peak hour histogram ---
+                if ts >= cal.date(byAdding: .day, value: -30, to: startOfToday)! {
+                    let hr = cal.component(.hour, from: ts)
+                    hourBuckets[hr] += 1
+                }
+
+                // Token roll-ups only apply to assistant lines (they carry usage).
+                guard evt.kind == .assistant, let tot = evt.tokens else { return }
+                let model = evt.model ?? "unknown"
+                let sessionId = evt.sessionId ?? ""
+                let project = evt.cwd ?? fallbackName
+
                 if ts >= startOfMonth {
                     month += tot
                     byModelMonth[model, default: .init()] += tot
                 }
                 if ts >= sevenDaysAgo {
                     week += tot
-                    byProjectWeek[projectName, default: .init()] += tot
+                    byCwdWeek[project, default: .init()] += tot
                     let dayStart = cal.startOfDay(for: ts)
                     let daysAgo = cal.dateComponents([.day], from: dayStart, to: startOfToday).day ?? 0
                     let idx = 6 - daysAgo
@@ -127,13 +152,41 @@ final class ClaudeCodeProvider: UsageProvider {
 
         let state: ProviderState = (today.billableTotal == 0 && month.billableTotal == 0) ? .empty : .ok
 
-        // Top 5 projects by billable tokens this week.
-        let topProjects = byProjectWeek
+        // Top 5 projects by billable tokens this week — keyed by real cwd path.
+        let topProjects = byCwdWeek
             .filter { $0.value.billableTotal > 0 }
             .sorted { $0.value.billableTotal > $1.value.billableTotal }
             .prefix(5)
-            .map { (name, totals) -> [String: Any] in
-                ["name": name, "tokens": Fmt.tokens(totals.billableTotal), "raw": totals.billableTotal]
+            .map { (path, totals) -> [String: Any] in
+                [
+                    "name": Self.prettyProject(path: path),
+                    "path": path,
+                    "tokens": Fmt.tokens(totals.billableTotal),
+                    "raw": totals.billableTotal,
+                ]
+            }
+
+        // Peak hour: bucket with the most messages in the last 30 days.
+        let peakHourIdx = hourBuckets.enumerated().max(by: { $0.element < $1.element })?.offset ?? 0
+        let peakHourLabel = Self.formatHour(peakHourIdx)
+
+        // Per-model breakdown for the drawer: input vs output vs cache_write,
+        // over the current month (matches what Claude Code's "Models" tab
+        // displays). Values are raw ints so the web side can format freely.
+        let modelBreakdown: [[String: Any]] = byModelMonth
+            .filter { $0.value.billableTotal > 0 && !$0.key.contains("synthetic") }
+            .sorted { $0.value.billableTotal > $1.value.billableTotal }
+            .prefix(6)
+            .map { (name, t) -> [String: Any] in
+                [
+                    "name":       prettyModel(name),
+                    "raw":        name,
+                    "input":      t.inputTokens,
+                    "output":     t.outputTokens,
+                    "cacheRead":  t.cacheReadTokens,
+                    "cacheWrite": t.cacheWriteTokens,
+                    "billable":   t.billableTotal,
+                ]
             }
 
         // Cache hit rate = cacheRead / (cacheRead + input + cacheWrite).
@@ -149,11 +202,29 @@ final class ClaudeCodeProvider: UsageProvider {
             "cacheHitRate": "\(cacheHitRate)",
             "cacheReadToday": Fmt.tokens(today.cacheReadTokens),
             "cacheWriteToday": Fmt.tokens(today.cacheWriteTokens),
+            "messagesToday": "\(messagesToday)",
+            "messagesWeek": "\(messagesWeek)",
+            "messagesMonth": "\(messagesMonth)",
+            "peakHour": peakHourLabel,
+            "peakHourIdx": "\(peakHourIdx)",
+            // Raw month totals for the "real consumption" breakdown in the
+            // Cache tab. Claude Code's UI only shows input+output; these four
+            // fields expose the full picture so subscription users can see
+            // how much cache re-use the platform is doing under the hood.
+            "monthInput":      "\(month.inputTokens)",
+            "monthOutput":     "\(month.outputTokens)",
+            "monthCacheRead":  "\(month.cacheReadTokens)",
+            "monthCacheWrite": "\(month.cacheWriteTokens)",
         ]
         if !topProjects.isEmpty,
            let data = try? JSONSerialization.data(withJSONObject: topProjects),
            let s = String(data: data, encoding: .utf8) {
             extras["topProjects"] = s
+        }
+        if !modelBreakdown.isEmpty,
+           let data = try? JSONSerialization.data(withJSONObject: modelBreakdown),
+           let s = String(data: data, encoding: .utf8) {
+            extras["modelBreakdown"] = s
         }
 
         return ProviderSnapshot(
@@ -182,20 +253,39 @@ final class ClaudeCodeProvider: UsageProvider {
         )
     }
 
-    /// Extract a human-friendly project name from a Claude Code session path.
-    /// Claude stores sessions under `~/.claude/projects/<slug>/<session>.jsonl`
-    /// where <slug> is the escaped absolute project path. We take the last
-    /// component after slash escapes.
+    /// Fallback project name from the slug folder when a JSONL line has no
+    /// `cwd` field. The slug encodes the absolute project path but separators
+    /// and actual hyphens are both `-`, so this is lossy — prefer `cwd`.
     private static func projectName(from url: URL) -> String {
         let parent = url.deletingLastPathComponent().lastPathComponent
         if parent.isEmpty { return "—" }
-        // Slugs look like "-Users-xiaoxiannv-Downloads-TokenDash".
-        // Take the trailing segment.
         let parts = parent.split(separator: "-")
-        if let last = parts.last, !last.isEmpty {
-            return String(last)
-        }
+        if let last = parts.last, !last.isEmpty { return String(last) }
         return parent
+    }
+
+    /// Human-readable project label from an absolute cwd path.
+    /// `/Users/you/Downloads/TokenDash` -> `~/Downloads/TokenDash`
+    /// `/Users/you`                    -> `~`
+    /// For very deep paths, we keep the last 3 components after `~`.
+    static func prettyProject(path: String) -> String {
+        let home = NSHomeDirectory()
+        var p = path
+        if p.hasPrefix(home) {
+            p = "~" + p.dropFirst(home.count)
+        }
+        let parts = p.split(separator: "/").map(String.init)
+        if parts.count <= 4 { return p }
+        return "~/…/" + parts.suffix(2).joined(separator: "/")
+    }
+
+    /// Format a 24-hour bucket index as "10 AM", "3 PM" (local).
+    static func formatHour(_ h: Int) -> String {
+        let h = ((h % 24) + 24) % 24
+        if h == 0 { return "12 AM" }
+        if h < 12 { return "\(h) AM" }
+        if h == 12 { return "12 PM" }
+        return "\(h - 12) PM"
     }
 
     private func topModelShares(from dict: [String: TokenTotals]) -> [ModelShare] {
@@ -211,7 +301,19 @@ final class ClaudeCodeProvider: UsageProvider {
         return result
     }
 
-    private func parseFile(url: URL, sink: (_ ts: Date, _ model: String, _ sessionId: String, _ tot: TokenTotals) -> Void) {
+    // A single message from a JSONL file. Tokens are present only on
+    // assistant lines that carry a usage block.
+    struct ParsedEvent {
+        enum Kind { case user, assistant, other }
+        let ts: Date
+        let kind: Kind
+        let model: String?
+        let sessionId: String?
+        let cwd: String?
+        let tokens: TokenTotals?
+    }
+
+    private func parseFile(url: URL, sink: (ParsedEvent) -> Void) {
         guard let handle = try? FileHandle(forReadingFrom: url) else { return }
         defer { try? handle.close() }
 
@@ -236,24 +338,46 @@ final class ClaudeCodeProvider: UsageProvider {
     private func processLine(_ data: Data,
                              iso: ISO8601DateFormatter,
                              isoPlain: ISO8601DateFormatter,
-                             sink: (Date, String, String, TokenTotals) -> Void) {
+                             sink: (ParsedEvent) -> Void) {
         guard !data.isEmpty else { return }
         guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
-        guard (obj["type"] as? String) == "assistant" else { return }
-        guard let message = obj["message"] as? [String: Any],
-              let usage = message["usage"] as? [String: Any] else { return }
-        let model = (message["model"] as? String) ?? "unknown"
-        let sessionId = (obj["sessionId"] as? String) ?? ""
+        let typeStr = (obj["type"] as? String) ?? ""
+        // Ignore sidechain / bookkeeping entries (queue-operation, tool_use
+        // summaries etc.) — only count real user / assistant turns.
+        let kind: ParsedEvent.Kind
+        switch typeStr {
+        case "user": kind = .user
+        case "assistant": kind = .assistant
+        default: return
+        }
+
         let tsStr = (obj["timestamp"] as? String) ?? ""
         let ts = iso.date(from: tsStr) ?? isoPlain.date(from: tsStr) ?? Date.distantPast
-        let tot = TokenTotals(
-            inputTokens: (usage["input_tokens"] as? Int) ?? 0,
-            outputTokens: (usage["output_tokens"] as? Int) ?? 0,
-            cacheReadTokens: (usage["cache_read_input_tokens"] as? Int) ?? 0,
-            cacheWriteTokens: (usage["cache_creation_input_tokens"] as? Int) ?? 0,
-            reasoningTokens: 0
-        )
-        sink(ts, model, sessionId, tot)
+        guard ts != Date.distantPast else { return }
+
+        let sessionId = obj["sessionId"] as? String
+        let cwd = obj["cwd"] as? String
+        // Skip sidechain lines — those inflate message counts without
+        // representing a real turn.
+        if (obj["isSidechain"] as? Bool) == true && kind == .user { return }
+
+        var model: String? = nil
+        var tokens: TokenTotals? = nil
+        if kind == .assistant,
+           let message = obj["message"] as? [String: Any] {
+            model = message["model"] as? String
+            if let usage = message["usage"] as? [String: Any] {
+                tokens = TokenTotals(
+                    inputTokens: (usage["input_tokens"] as? Int) ?? 0,
+                    outputTokens: (usage["output_tokens"] as? Int) ?? 0,
+                    cacheReadTokens: (usage["cache_read_input_tokens"] as? Int) ?? 0,
+                    cacheWriteTokens: (usage["cache_creation_input_tokens"] as? Int) ?? 0,
+                    reasoningTokens: 0
+                )
+            }
+        }
+
+        sink(ParsedEvent(ts: ts, kind: kind, model: model, sessionId: sessionId, cwd: cwd, tokens: tokens))
     }
 
     private func prettyModel(_ raw: String) -> String {

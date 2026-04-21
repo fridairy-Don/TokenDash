@@ -93,6 +93,22 @@ extension DataStore {
            let arr = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] {
             out["topProjects"] = arr
         }
+        // M4 additions: message counts, peak hour, per-model in/out.
+        if let m = s.extras["messagesToday"], let n = Int(m) { out["messagesToday"] = n }
+        if let m = s.extras["messagesWeek"],  let n = Int(m) { out["messagesWeek"]  = n }
+        if let m = s.extras["messagesMonth"], let n = Int(m) { out["messagesMonth"] = n }
+        if let h = s.extras["peakHour"] { out["peakHour"] = h }
+        if let mbJSON = s.extras["modelBreakdown"],
+           let data = mbJSON.data(using: .utf8),
+           let arr = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] {
+            out["modelBreakdown"] = arr
+        }
+        // Month-level raw token breakdown for the Cache tab "real consumption"
+        // bars. These are ints so the JS can format and compute ratios freely.
+        if let v = s.extras["monthInput"],      let n = Int(v) { out["monthInput"]      = n }
+        if let v = s.extras["monthOutput"],     let n = Int(v) { out["monthOutput"]     = n }
+        if let v = s.extras["monthCacheRead"],  let n = Int(v) { out["monthCacheRead"]  = n }
+        if let v = s.extras["monthCacheWrite"], let n = Int(v) { out["monthCacheWrite"] = n }
         attachHistory(snap: s, into: &out)
 
         return out

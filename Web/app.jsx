@@ -566,44 +566,105 @@ function VD2_ClaudeHero({ t, expanded, onToggle }) {
   );
 }
 
-// Claude drawer — only "几点到几点" (top sessions) lives here now,
-// since 7-day / Month / bar chart got promoted to the primary view.
+// Claude drawer — three tabs (Overview / Models / Cache) mirroring Claude
+// Code's own UI vocabulary. Each tab tells one story instead of stacking
+// five boards of data on top of each other. The drawer grew organically in
+// M3/M4 and was getting dense — tabs pay the (tiny) UX cost of an extra
+// click in exchange for calmer per-screen density and a familiar pattern.
 function VD2_ClaudeDrawer({ t, d }) {
-  const hasSessions = d.topSessions && d.topSessions.length > 0;
-  const hasProjects = d.topProjects && d.topProjects.length > 0;
-  const hitRate = (typeof d.cacheHitRate === 'number') ? d.cacheHitRate : null;
+  const [tab, setTab] = React.useState('overview');
+  const fmtInt = (n) => n == null ? '—' : n.toLocaleString();
+  const fmtTokens = (n) => {
+    if (n == null) return '—';
+    if (n < 1000) return String(n);
+    if (n < 1_000_000) return (n / 1000).toFixed(1) + 'K';
+    if (n < 1_000_000_000) return (n / 1_000_000).toFixed(2) + 'M';
+    return (n / 1_000_000_000).toFixed(2) + 'B';
+  };
+
+  const tabs = [
+    { id: 'overview', label: 'Overview' },
+    { id: 'models',   label: 'Models'   },
+    { id: 'cache',    label: 'Cache'    },
+  ];
+
   return (
     <div
       onClick={(e) => e.stopPropagation()}
       style={{ marginTop: 14, paddingTop: 14, borderTop: `1px solid ${t.border}` }}>
 
-      {/* Cache hit rate — a number most Claude Code users have never seen */}
-      {hitRate !== null && (
+      {/* Tab bar — matches Claude Code's own Overview/Models segmented pill */}
+      <div style={{
+        display: 'inline-flex', gap: 4, marginBottom: 12,
+        background: t.compactBg, borderRadius: 8, padding: 3,
+        border: `1px solid ${t.hair}`,
+      }}>
+        {tabs.map(x => (
+          <button
+            key={x.id}
+            onClick={() => setTab(x.id)}
+            style={{
+              appearance: 'none', border: 'none', cursor: 'pointer',
+              background: tab === x.id ? t.surface : 'transparent',
+              color: tab === x.id ? t.ink : t.muted,
+              fontFamily: TD_FONTS.sans, fontSize: 11.5,
+              fontWeight: tab === x.id ? 600 : 400,
+              padding: '3px 10px', borderRadius: 6,
+              boxShadow: tab === x.id ? '0 1px 2px rgba(0,0,0,0.08)' : 'none',
+              transition: 'background 120ms ease',
+            }}
+          >{x.label}</button>
+        ))}
+      </div>
+
+      {tab === 'overview' && <ClaudeOverviewTab t={t} d={d} fmtInt={fmtInt} />}
+      {tab === 'models'   && <ClaudeModelsTab   t={t} d={d} fmtTokens={fmtTokens} />}
+      {tab === 'cache'    && <ClaudeCacheTab    t={t} d={d} fmtTokens={fmtTokens} />}
+    </div>
+  );
+}
+
+// Overview — "when and where I'm using Claude Code"
+function ClaudeOverviewTab({ t, d, fmtInt }) {
+  const hasSessions = d.topSessions && d.topSessions.length > 0;
+  const hasProjects = d.topProjects && d.topProjects.length > 0;
+  const msgToday = (typeof d.messagesToday === 'number') ? d.messagesToday : null;
+  const msgWeek  = (typeof d.messagesWeek  === 'number') ? d.messagesWeek  : null;
+  const msgMonth = (typeof d.messagesMonth === 'number') ? d.messagesMonth : null;
+  const peakHour = d.peakHour || null;
+  return (
+    <div>
+      {(msgToday !== null || peakHour) && (
         <div style={{
-          display: 'flex', alignItems: 'baseline', justifyContent: 'space-between',
-          marginBottom: 10, paddingBottom: 10, borderBottom: `1px solid ${t.hair}`,
+          display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr',
+          gap: 8, marginBottom: 12, paddingBottom: 10,
+          borderBottom: `1px solid ${t.hair}`,
         }}>
-          <div>
-            <div style={{
-              fontFamily: TD_FONTS.serif, fontStyle: 'italic', fontSize: 12, color: t.ink,
-            }}>Prompt cache hit rate</div>
-            <div style={{
-              fontFamily: TD_FONTS.serif, fontStyle: 'italic', fontSize: 10.5, color: t.dim, marginTop: 2,
-            }}>cached reads ÷ total input</div>
-          </div>
-          <div style={{ textAlign: 'right' }}>
-            <div style={{
-              fontFamily: TD_FONTS.mono, fontSize: 22, color: t.ink,
-              fontVariantNumeric: 'tabular-nums', letterSpacing: -0.5,
-            }}>{hitRate}%</div>
-            <div style={{
-              fontFamily: TD_FONTS.serif, fontStyle: 'italic', fontSize: 10, color: t.dim,
-            }}>{hitRate >= 60 ? 'healthy' : hitRate >= 30 ? 'ok' : 'low — prompts change often?'}</div>
-          </div>
+          {[
+            { k: 'Messages today', v: fmtInt(msgToday) },
+            { k: '7-day msgs',     v: fmtInt(msgWeek) },
+            { k: 'Month msgs',     v: fmtInt(msgMonth) },
+            { k: 'Peak hour',      v: peakHour || '—' },
+          ].map((x, i) => (
+            <div key={i} style={{
+              background: t.compactBg,
+              border: `1px solid ${t.hair}`,
+              borderRadius: 6, padding: '6px 8px',
+            }}>
+              <div style={{
+                fontFamily: TD_FONTS.serif, fontStyle: 'italic',
+                fontSize: 9.5, color: t.dim, marginBottom: 2,
+                whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+              }}>{x.k}</div>
+              <div style={{
+                fontFamily: TD_FONTS.mono, fontSize: 13, color: t.ink,
+                fontVariantNumeric: 'tabular-nums',
+              }}>{x.v}</div>
+            </div>
+          ))}
         </div>
       )}
 
-      {/* Top projects this week */}
       {hasProjects && (
         <div style={{ marginBottom: 12, paddingBottom: 10, borderBottom: `1px solid ${t.hair}` }}>
           <div style={{
@@ -634,6 +695,202 @@ function VD2_ClaudeDrawer({ t, d }) {
           fontFamily: TD_FONTS.serif, fontStyle: 'italic',
           fontSize: 11, color: t.dim,
         }}>No sessions yet today.</div>
+      )}
+    </div>
+  );
+}
+
+// Models — "which models I'm using, and the in/out split"
+function ClaudeModelsTab({ t, d, fmtTokens }) {
+  const rows = d.modelBreakdown || [];
+  if (rows.length === 0) {
+    return (
+      <div style={{
+        fontFamily: TD_FONTS.serif, fontStyle: 'italic', fontSize: 11, color: t.dim,
+      }}>No model usage recorded yet this month.</div>
+    );
+  }
+  const grand = rows.reduce((a, x) => a + ((x.input||0)+(x.output||0)), 0);
+  return (
+    <div>
+      <div style={{
+        fontFamily: TD_FONTS.serif, fontStyle: 'italic', fontSize: 12, color: t.ink, marginBottom: 8,
+      }}>Model breakdown (this month)</div>
+      {rows.map((m, i) => {
+        const total = (m.input||0) + (m.output||0);
+        const share = grand > 0 ? Math.round(total / grand * 100) : 0;
+        return (
+          <div key={i} style={{
+            display: 'grid', gridTemplateColumns: '1fr auto auto',
+            columnGap: 10, alignItems: 'baseline',
+            fontSize: 11, padding: '6px 0',
+            borderBottom: i < rows.length - 1 ? `1px solid ${t.hair}` : 'none',
+          }}>
+            <span style={{
+              color: t.ink, fontFamily: TD_FONTS.serif, fontStyle: 'italic', fontSize: 12,
+              whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+            }}>{m.name}</span>
+            <span style={{
+              fontFamily: TD_FONTS.mono, color: t.muted,
+              fontVariantNumeric: 'tabular-nums',
+            }}>{fmtTokens(m.input)} in · {fmtTokens(m.output)} out</span>
+            <span style={{
+              fontFamily: TD_FONTS.mono, color: t.ink, fontWeight: 500,
+              fontVariantNumeric: 'tabular-nums', minWidth: 40, textAlign: 'right',
+            }}>{share}%</span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// Cache — "what's happening under the hood, that official UI hides"
+function ClaudeCacheTab({ t, d, fmtTokens }) {
+  const hitRate = (typeof d.cacheHitRate === 'number') ? d.cacheHitRate : null;
+  const input  = d.monthInput      || 0;
+  const output = d.monthOutput     || 0;
+  const cread  = d.monthCacheRead  || 0;
+  const cwrite = d.monthCacheWrite || 0;
+  const total  = input + output + cread + cwrite;
+  const official = input + output;
+  const reuse = cwrite > 0 ? cread / cwrite : 0;
+  const dark = t.ink === VD2_DARK.ink;
+
+  // Palette: cache_read is the "headline" (biggest), cache_write is the
+  // cost input, output is earned value, input is raw prompt.
+  const colors = dark
+    ? { read: '#8AA9C4', write: '#A8876F', output: '#8EA68B', input: '#6D6860' }
+    : { read: '#5A7898', write: '#C48872', output: '#7D9B78', input: '#7A7066' };
+
+  const rows = [
+    { k: 'Cache reads',  v: cread,  color: colors.read,   hint: 'cheap cached re-use' },
+    { k: 'Cache writes', v: cwrite, color: colors.write,  hint: 'first-time cached'   },
+    { k: 'Output',       v: output, color: colors.output, hint: 'model responses'     },
+    { k: 'Input',        v: input,  color: colors.input,  hint: 'your new prompts'    },
+  ];
+
+  return (
+    <div>
+      {/* Cache hit rate headline */}
+      {hitRate !== null && (
+        <div style={{
+          display: 'flex', alignItems: 'baseline', justifyContent: 'space-between',
+          marginBottom: 12, paddingBottom: 10, borderBottom: `1px solid ${t.hair}`,
+        }}>
+          <div>
+            <div style={{
+              fontFamily: TD_FONTS.serif, fontStyle: 'italic', fontSize: 12, color: t.ink,
+            }}>Prompt cache hit rate</div>
+            <div style={{
+              fontFamily: TD_FONTS.serif, fontStyle: 'italic', fontSize: 10.5, color: t.dim, marginTop: 2,
+            }}>cached reads ÷ total input (today)</div>
+          </div>
+          <div style={{ textAlign: 'right' }}>
+            <div style={{
+              fontFamily: TD_FONTS.mono, fontSize: 22, color: t.ink,
+              fontVariantNumeric: 'tabular-nums', letterSpacing: -0.5,
+            }}>{hitRate}%</div>
+            <div style={{
+              fontFamily: TD_FONTS.serif, fontStyle: 'italic', fontSize: 10, color: t.dim,
+            }}>{hitRate >= 60 ? 'healthy' : hitRate >= 30 ? 'ok' : 'low — prompts change often?'}</div>
+          </div>
+        </div>
+      )}
+
+      {/* Real consumption bars */}
+      {total > 0 && (
+        <div>
+          <div style={{
+            fontFamily: TD_FONTS.serif, fontStyle: 'italic', fontSize: 12, color: t.ink, marginBottom: 2,
+          }}>Real consumption (this month)</div>
+          <div style={{
+            fontFamily: TD_FONTS.serif, fontStyle: 'italic', fontSize: 10.5, color: t.dim, marginBottom: 8,
+          }}>what Claude Code's UI hides — full token flow through the system</div>
+
+          {rows.map((r, i) => {
+            const pct = total > 0 ? (r.v / total * 100) : 0;
+            // Minimum 2px so tiny slices stay visible; otherwise proportional.
+            const barWidth = r.v === 0 ? 0 : Math.max(2, pct);
+            return (
+              <div key={i} style={{
+                display: 'grid',
+                gridTemplateColumns: '88px 1fr 72px 52px',
+                columnGap: 8, alignItems: 'center',
+                padding: '4px 0',
+                fontSize: 11,
+              }}>
+                <span style={{
+                  fontFamily: TD_FONTS.serif, fontStyle: 'italic', color: t.ink,
+                }}>{r.k}</span>
+                <div style={{
+                  height: 8, background: t.hair, borderRadius: 3, overflow: 'hidden',
+                }}>
+                  <div style={{
+                    height: '100%', width: `${barWidth}%`, background: r.color,
+                    borderRadius: 3, transition: 'width 200ms ease',
+                  }} />
+                </div>
+                <span style={{
+                  fontFamily: TD_FONTS.mono, color: t.muted,
+                  fontVariantNumeric: 'tabular-nums', textAlign: 'right',
+                }}>{fmtTokens(r.v)}</span>
+                <span style={{
+                  fontFamily: TD_FONTS.mono, color: t.ink,
+                  fontVariantNumeric: 'tabular-nums', textAlign: 'right',
+                }}>{pct < 0.01 ? '<0.01%' : pct < 1 ? pct.toFixed(2) + '%' : pct.toFixed(1) + '%'}</span>
+              </div>
+            );
+          })}
+
+          {/* Contrast: what official UI shows vs. what really flowed */}
+          <div style={{
+            display: 'grid', gridTemplateColumns: '1fr 1fr',
+            gap: 8, marginTop: 10, paddingTop: 10,
+            borderTop: `1px solid ${t.hair}`,
+          }}>
+            <div style={{
+              background: t.compactBg, border: `1px solid ${t.hair}`,
+              borderRadius: 6, padding: '6px 8px',
+            }}>
+              <div style={{
+                fontFamily: TD_FONTS.serif, fontStyle: 'italic',
+                fontSize: 9.5, color: t.dim, marginBottom: 2,
+              }}>Official UI shows</div>
+              <div style={{
+                fontFamily: TD_FONTS.mono, fontSize: 14, color: t.ink,
+                fontVariantNumeric: 'tabular-nums',
+              }}>{fmtTokens(official)}</div>
+            </div>
+            <div style={{
+              background: t.compactBg, border: `1px solid ${t.hair}`,
+              borderRadius: 6, padding: '6px 8px',
+            }}>
+              <div style={{
+                fontFamily: TD_FONTS.serif, fontStyle: 'italic',
+                fontSize: 9.5, color: t.dim, marginBottom: 2,
+              }}>System actually processed</div>
+              <div style={{
+                fontFamily: TD_FONTS.mono, fontSize: 14, color: t.ink,
+                fontVariantNumeric: 'tabular-nums',
+              }}>{fmtTokens(total)}</div>
+            </div>
+          </div>
+
+          {/* Insight — the line that makes this page worth reading */}
+          {reuse >= 2 && (
+            <div style={{
+              marginTop: 10,
+              fontFamily: TD_FONTS.serif, fontStyle: 'italic',
+              fontSize: 11, color: t.dim, lineHeight: 1.45,
+            }}>
+              <span style={{ color: t.ink }}>Cache reuse {reuse < 10 ? reuse.toFixed(1) : Math.round(reuse)}×</span>
+              {' '}— each cached chunk was re-read {reuse < 10 ? reuse.toFixed(1) : Math.round(reuse)} times
+              on average. Subscription plans don't bill for this, but on the API
+              you'd have paid for every one.
+            </div>
+          )}
+        </div>
       )}
     </div>
   );
