@@ -2947,83 +2947,36 @@ function useOrder(key, defaultOrder) {
   return [reconciled, setOrderReconciled, reset];
 }
 
-// FLIP animation: measure each draggable's rect before/after order changes,
-// then play the inverse translate so the browser animates it back to 0.
-// Sortable-style drag with live reordering. As the cursor enters a
-// sibling's rect, that sibling FLIPs out of the way mid-drag. Key
-// engineering decisions after several failed attempts:
+// Drag-to-reorder using the native HTML5 drag API.
 //
-//   • Position tracking uses offsetLeft/offsetTop, NOT getBoundingClientRect.
-//     offset* is pure layout (unaffected by transform), so we don't need to
-//     clear the transform every frame just to measure where the card
-//     "would be" — no forced reflows, no visual flicker.
+// • onDragOver fires on sibling cards while the cursor is over them —
+//   that's where live reordering happens. Each time the cursor moves
+//   onto a different sibling, we splice the dragged id into that
+//   sibling's slot, and React's useLayoutEffect FLIP-animates every
+//   card that shifted as a result.
 //
-//   • Transform is computed as a delta from both cursor movement AND
-//     natural-position shift:
-//       transform.y = (cursor.y - cursorAtDragStart.y)
-//                   + (offsetTopAtDragStart - offsetTopNow)
-//     When a reorder moves the card up by one slot, offsetTopNow drops;
-//     the second term compensates exactly so the card stays under the
-//     cursor with no jump.
+// • user-select: none on the wrapper prevents WebKit from starting a
+//   text selection on mousedown, which can suppress dragstart.
 //
-//   • FLIP skips the dragged card (active gate) — its cursor-anchored
-//     transform must never fight the FLIP system.
-//
-//   • lastTargetRef throttles setOrder to once per target change, not
-//     once per pointermove frame. The cascade of state updates that
-//     corrupted layout in earlier attempts came from unthrottled setOrder.
+// • setOrder wraps the reconciled state (see useOrder's
+//   setOrderReconciled) so providers added at runtime via the registry
+//   (Moonshot / GitHub / Vercel) are found by indexOf and reorder
+//   correctly — without that fix dragStart fired but the update silently
+//   no-oped for new providers.
 function Draggable({ id, group, order, setOrder, t, children }) {
   const ref = React.useRef(null);
-  // Natural (layout-only) position for FLIP tracking. Uses offsetTop/offsetLeft
-  // which are immune to transform/animation — avoids the classic mid-flight
-  // FLIP cascade where getBoundingClientRect returns animated rectangles.
-  const prevNatRef = React.useRef(null);
+  const prevRectRef = React.useRef(null);
   const [dragging, setDragging] = React.useState(false);
 
-  const dragStartRef = React.useRef(null);
-  const lastCursorRef = React.useRef(null);
-  const activeRef = React.useRef(false);
-  // True for the 220 ms release animation after drop so useLayoutEffect
-  // doesn't overwrite the release transition with a FLIP.
-  const recentlyReleasedRef = React.useRef(false);
-  const lastTargetRef = React.useRef(null);
-  const justDraggedRef = React.useRef(false);
-
-  // Pure-arithmetic transform to keep the dragged card under the cursor.
-  // Reads only offsetLeft/offsetTop — no reflow.
-  const applyDragTransform = (cursorX, cursorY) => {
-    const el = ref.current;
-    const ds = dragStartRef.current;
-    if (!el || !ds) return;
-    const tx = (cursorX - ds.cursorX) + (ds.offsetX - el.offsetLeft);
-    const ty = (cursorY - ds.cursorY) + (ds.offsetY - el.offsetTop);
-    el.style.transition = 'none';
-    el.style.transform = `translate(${tx}px, ${ty}px)`;
-  };
-
+  // FLIP animation: on every render, if this card's layout position
+  // changed since the previous render (other than because of its own
+  // active drag), snap to the old position and animate to the new one.
   React.useLayoutEffect(() => {
     const el = ref.current;
     if (!el) return;
-
-    // The dragged card and the just-released card both manage their own
-    // transforms — FLIP must never touch them. A FLIP applied while the
-    // release transition is running is exactly what piled up into the
-    // "cards scattered across the screen" layout bug.
-    if (activeRef.current || recentlyReleasedRef.current) {
-      if (activeRef.current && lastCursorRef.current && dragStartRef.current) {
-        applyDragTransform(lastCursorRef.current.x, lastCursorRef.current.y);
-      }
-      prevNatRef.current = { top: el.offsetTop, left: el.offsetLeft };
-      return;
-    }
-
-    // Sibling FLIP — using NATURAL layout coordinates (offsetTop/offsetLeft).
-    // Because they ignore transform/animation, comparing prev vs curr
-    // across renders always yields a layout delta, never a mid-animation
-    // spurious delta that would restart the FLIP on top of itself.
-    const prev = prevNatRef.current;
-    const curr = { top: el.offsetTop, left: el.offsetLeft };
-    if (prev && (prev.top !== curr.top || prev.left !== curr.left)) {
+    const prev = prevRectRef.current;
+    const curr = el.getBoundingClientRect();
+    if (prev && !dragging && (prev.top !== curr.top || prev.left !== curr.left)) {
       const dx = prev.left - curr.left;
       const dy = prev.top - curr.top;
       el.style.transition = 'none';
@@ -3032,158 +2985,55 @@ function Draggable({ id, group, order, setOrder, t, children }) {
       el.style.transition = 'transform 260ms cubic-bezier(0.2, 0.8, 0.2, 1)';
       el.style.transform = '';
     }
-    prevNatRef.current = curr;
+    prevRectRef.current = curr;
   });
 
-  const findTargetId = (x, y) => {
-    const all = document.querySelectorAll(`[data-drag-group="${group}"]`);
-    for (const el of all) {
-      if (el === ref.current) continue;
-      const r = el.getBoundingClientRect();
-      if (x >= r.left && x <= r.right && y >= r.top && y <= r.bottom) {
-        return el.getAttribute('data-drag-id');
-      }
-    }
-    return null;
-  };
-
-  const onPointerDown = (e) => {
-    if (e.pointerType === 'mouse' && e.button !== 0) return;
-    if (e.target.closest('input, button, a, textarea, select')) return;
-    // Start as "maybe dragging". The real activation happens when the
-    // pointer has moved past the threshold in pointermove.
-    dragStartRef.current = {
-      cursorX: e.clientX,
-      cursorY: e.clientY,
-      offsetX: 0,  // filled at activation
-      offsetY: 0,
-    };
-    activeRef.current = false;
-    lastTargetRef.current = null;
-    try { ref.current.setPointerCapture(e.pointerId); } catch (err) {}
-  };
-
-  const onPointerMove = (e) => {
-    const ds = dragStartRef.current;
-    if (!ds) return;
-
-    if (!activeRef.current) {
-      const dx = e.clientX - ds.cursorX;
-      const dy = e.clientY - ds.cursorY;
-      if (Math.abs(dx) + Math.abs(dy) < 5) return;
-      activeRef.current = true;
-      setDragging(true);
-      const el = ref.current;
-      if (el) {
-        // Baseline offsets captured at activation — everything relative.
-        ds.offsetX = el.offsetLeft;
-        ds.offsetY = el.offsetTop;
-        el.style.zIndex = '10';
-        el.style.pointerEvents = 'none';
-      }
-    }
-
-    lastCursorRef.current = { x: e.clientX, y: e.clientY };
-    applyDragTransform(e.clientX, e.clientY);
-
-    const targetId = findTargetId(e.clientX, e.clientY);
-    if (targetId && targetId !== id && targetId !== lastTargetRef.current) {
-      lastTargetRef.current = targetId;
-      setOrder(ord => {
-        const next = ord.slice();
-        const from = next.indexOf(id);
-        const to = next.indexOf(targetId);
-        if (from < 0 || to < 0) return ord;
-        next.splice(from, 1);
-        next.splice(to, 0, id);
-        return next;
-      });
-      // After React commits, useLayoutEffect re-applies the transform
-      // against the new offsetLeft/offsetTop — no jump.
-    }
-  };
-
-  const onPointerUp = (e) => {
-    const wasActive = activeRef.current;
-    const el = ref.current;
-    dragStartRef.current = null;
-
-    if (!wasActive) {
-      activeRef.current = false;
-      if (el) el.style.pointerEvents = '';
-      return;
-    }
-
-    // Hand off from "drag in progress" to "release in progress". The
-    // recentlyReleased flag tells useLayoutEffect to leave our transform
-    // alone for the duration of the release animation. Without this flag,
-    // setDragging(false) triggers a re-render whose useLayoutEffect would
-    // take the FLIP branch and overwrite the release transition.
-    activeRef.current = false;
-    recentlyReleasedRef.current = true;
-    lastCursorRef.current = null;
-    lastTargetRef.current = null;
-
-    if (el) {
-      el.style.transition = 'transform 200ms cubic-bezier(0.2, 0.8, 0.2, 1)';
-      el.style.transform = '';
-      el.style.zIndex = '';
-      el.style.pointerEvents = '';
-    }
-
-    setTimeout(() => {
-      recentlyReleasedRef.current = false;
-      if (el) {
-        el.style.transition = 'none';
-        prevNatRef.current = { top: el.offsetTop, left: el.offsetLeft };
-      }
-    }, 220);
-
-    setDragging(false);
-
-    justDraggedRef.current = true;
-    setTimeout(() => { justDraggedRef.current = false; }, 0);
-    e.stopPropagation();
-  };
-
-  const onPointerCancel = () => {
-    const el = ref.current;
-    dragStartRef.current = null;
-    activeRef.current = false;
-    recentlyReleasedRef.current = false;
-    setDragging(false);
-    lastTargetRef.current = null;
-    lastCursorRef.current = null;
-    if (el) {
-      el.style.transition = 'transform 180ms cubic-bezier(0.2, 0.8, 0.2, 1)';
-      el.style.transform = '';
-      el.style.zIndex = '';
-      el.style.pointerEvents = '';
-    }
+  const reorder = (srcId) => {
+    setOrder(ord => {
+      if (srcId === id) return ord;
+      const next = ord.slice();
+      const from = next.indexOf(srcId);
+      const to = next.indexOf(id);
+      if (from < 0 || to < 0) return ord;
+      next.splice(from, 1);
+      next.splice(to, 0, srcId);
+      return next;
+    });
   };
 
   return (
     <div
       ref={ref}
-      data-drag-id={id}
-      data-drag-group={group}
-      onPointerDown={onPointerDown}
-      onPointerMove={onPointerMove}
-      onPointerUp={onPointerUp}
-      onPointerCancel={onPointerCancel}
-      onClickCapture={(e) => {
-        // If a drag just ended, stop the click from toggling the drawer.
-        if (justDraggedRef.current) { e.stopPropagation(); e.preventDefault(); }
+      draggable
+      onDragStart={(e) => {
+        _dragState.group = group;
+        _dragState.id = id;
+        e.dataTransfer.effectAllowed = 'move';
+        try { e.dataTransfer.setData('text/plain', id); } catch (err) {}
+        setTimeout(() => setDragging(true), 0);
+      }}
+      onDragEnd={() => {
+        setDragging(false);
+        _dragState.group = null;
+        _dragState.id = null;
+      }}
+      onDragOver={(e) => {
+        if (_dragState.group !== group || _dragState.id == null) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'move';
+        if (_dragState.id !== id) reorder(_dragState.id);
+      }}
+      onDrop={(e) => {
+        if (_dragState.group !== group) return;
+        e.preventDefault();
       }}
       style={{
         position: 'relative',
-        opacity: dragging ? 0.85 : 1,
+        opacity: dragging ? 0.35 : 1,
         borderRadius: 14,
-        cursor: dragging ? 'grabbing' : 'grab',
+        cursor: dragging ? 'grabbing' : 'auto',
         userSelect: 'none',
         WebkitUserSelect: 'none',
-        touchAction: 'none',
-        boxShadow: dragging ? '0 8px 22px rgba(0,0,0,0.18)' : 'none',
       }}>
       {children}
     </div>
