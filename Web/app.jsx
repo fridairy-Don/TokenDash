@@ -1940,18 +1940,321 @@ function RouterActivityTab({ t, d, fmtInt, fmtUsd }) {
 }
 
 function VD2_Groq({ t, d }) {
-  return (
-    <VD2_Compact t={t}>
-      <Monogram letter="G" t={t} tone="free" />
-      <div style={{ minWidth: 0, flex: 1 }}>
-        <div style={{ fontSize: 12, fontWeight: 600, color: t.muted, display: 'flex', alignItems: 'center', gap: 6, whiteSpace: 'nowrap' }}>
-          {d.name}<Pill t={t} tone="free">{d.pill}</Pill>
+  const [expanded, setExpanded] = React.useState(false);
+  const dark = t.ink === VD2_DARK.ink;
+  const hasDetail = (d.rpdLimit != null) || (d.modelIds && d.modelIds.length > 0);
+
+  // Unconfigured → compact "add key" card, no drawer.
+  if (d.state === 'unconfigured') {
+    return (
+      <VD2_Compact t={t}>
+        <Monogram letter="G" t={t} tone="free" />
+        <div style={{ minWidth: 0, flex: 1 }}>
+          <div style={{ fontSize: 12, fontWeight: 600, color: t.muted, display: 'flex', alignItems: 'center', gap: 6, whiteSpace: 'nowrap' }}>
+            {d.name}<Pill t={t} tone="free">{d.pill}</Pill>
+          </div>
+          <div style={{ fontFamily: TD_FONTS.serif, fontStyle: 'italic', fontSize: 11, color: t.dim, marginTop: 3 }}>
+            {d.note || 'API key not configured'}
+          </div>
         </div>
-        <div style={{ fontFamily: TD_FONTS.serif, fontStyle: 'italic', fontSize: 11, color: t.dim, marginTop: 3, lineHeight: 1.3 }}>
-          {d.note || 'no usage API'}
+      </VD2_Compact>
+    );
+  }
+
+  return (
+    <div
+      onClick={() => hasDetail && setExpanded(e => !e)}
+      style={{
+        background: t.compactBg,
+        border: `1px solid ${dark ? 'rgba(237,230,214,0.06)' : 'rgba(60,45,30,0.04)'}`,
+        borderRadius: 10, padding: '12px 14px', marginBottom: 8,
+        cursor: hasDetail ? 'pointer' : 'default',
+      }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        <Monogram letter="G" t={t} tone="free" />
+        <div style={{ minWidth: 0 }}>
+          <div style={{ fontSize: 12, fontWeight: 600, color: t.ink, display: 'flex', alignItems: 'center', gap: 6, whiteSpace: 'nowrap' }}>
+            {d.name}<Pill t={t} tone="free">{d.pill}</Pill>
+          </div>
+          <div style={{
+            fontFamily: TD_FONTS.mono, fontSize: 10.5, color: t.dim, marginTop: 3,
+            fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap',
+          }}>{d.note}</div>
+        </div>
+        <div style={{ flex: 1 }} />
+        <div style={{ textAlign: 'right' }}>
+          <div style={{
+            fontFamily: TD_FONTS.mono, fontSize: 15, color: t.ink,
+            fontVariantNumeric: 'tabular-nums', letterSpacing: -0.3, lineHeight: 1,
+          }}>{d.headline}</div>
+          <div style={{
+            fontFamily: TD_FONTS.serif, fontStyle: 'italic',
+            fontSize: 10, color: t.dim, marginTop: 4, whiteSpace: 'nowrap',
+          }}>{d.caption || 'requests left'}</div>
         </div>
       </div>
-    </VD2_Compact>
+
+      {expanded && <VD2_GroqDrawer t={t} d={d} />}
+    </div>
+  );
+}
+
+function VD2_GroqDrawer({ t, d }) {
+  const [modelsOpen, setModelsOpen] = React.useState(false);
+  const dark = t.ink === VD2_DARK.ink;
+  const modelIds = d.modelIds || [];
+  const modelGroups = d.modelGroups || [];
+  const hourlyBurn = d.hourlyBurn || [];         // requests used per hour
+  const hourlyBalance = d.hourlyBalance || [];   // end-of-hour remaining
+
+  const openConsole = (e) => {
+    e.stopPropagation();
+    if (window.webkit?.messageHandlers?.td) {
+      window.webkit.messageHandlers.td.postMessage('open-url:https://console.groq.com/dashboard/usage');
+    }
+  };
+
+  const fmtInt = (n) => n == null ? '—' : Number(n).toLocaleString();
+  const fmtReset = (sec) => {
+    if (sec == null) return '—';
+    const s = Number(sec);
+    if (s < 60) return `${s}s`;
+    if (s < 3600) return `${Math.round(s / 60)}m`;
+    if (s < 86400) return `${Math.floor(s / 3600)}h ${Math.round((s % 3600) / 60)}m`;
+    return `${Math.floor(s / 86400)}d`;
+  };
+
+  // ─── Hero stats — the three numbers that actually answer "how much Whisper
+  // did my game use today?". Matches the Moonshot drawer layout.
+  const usedToday = Number(d.usedTodayNum || 0);
+  const burnHour  = Number(d.burnPerHourNum || 0);
+  const remain    = d.rpdRemain != null ? Number(d.rpdRemain) : null;
+  const limit     = d.rpdLimit  != null ? Number(d.rpdLimit)  : null;
+  const sinceLabel = d.sinceLabel || '';
+  const usedPctOfLimit = (limit && limit > 0) ? Math.round((usedToday / limit) * 100) : null;
+
+  // ─── 24h hourly burn chart (today) — requests consumed per hour.
+  const hasTodayBurn = hourlyBurn.some(v => v > 0);
+  const hourTip = (i) => {
+    const v = hourlyBurn[i] || 0;
+    const bal = hourlyBalance[i] || 0;
+    const hh = String(i).padStart(2, '0');
+    if (v === 0 && bal === 0) return `${hh}:00 · no data`;
+    if (v === 0) return `${hh}:00 · idle · ${fmtInt(bal)} remaining`;
+    return `${hh}:00 · ${fmtInt(v)} requests · ${fmtInt(bal)} remaining`;
+  };
+  const hourLabels = ['0','','','3','','','6','','','9','','','12','','','15','','','18','','','21','',''];
+
+  const probedAgo = d.probedSecondsAgo;
+  const probedLabel = probedAgo == null ? ''
+    : probedAgo < 60 ? `probed ${probedAgo}s ago`
+    : probedAgo < 3600 ? `probed ${Math.round(probedAgo / 60)}m ago`
+    : `probed ${Math.floor(probedAgo / 3600)}h ago`;
+
+  const burnTone = burnHour > 0 ? (dark ? TD.dCoral : TD.coral) : t.ink;
+
+  return (
+    <div
+      onClick={(e) => e.stopPropagation()}
+      style={{ marginTop: 12, paddingTop: 10, borderTop: `1px solid ${t.hair}` }}>
+
+      {/* HERO — Used today / Burn rate / Remaining. */}
+      <div style={{
+        display: 'grid', gridTemplateColumns: '1.3fr 1fr 1fr',
+        gap: 8, marginBottom: 14,
+      }}>
+        <div style={{
+          background: t.compactBg, border: `1px solid ${t.hair}`,
+          borderRadius: 8, padding: '8px 10px',
+        }}>
+          <div style={{
+            fontFamily: TD_FONTS.serif, fontStyle: 'italic',
+            fontSize: 10, color: t.dim, marginBottom: 3,
+          }}>Used today</div>
+          <div style={{
+            fontFamily: TD_FONTS.mono, fontSize: 18, color: t.ink,
+            fontVariantNumeric: 'tabular-nums', letterSpacing: -0.3, lineHeight: 1,
+          }}>{fmtInt(Math.round(usedToday))}</div>
+          <div style={{
+            fontFamily: TD_FONTS.serif, fontStyle: 'italic',
+            fontSize: 9.5, color: t.dim, marginTop: 4,
+            whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+          }}>{sinceLabel || 'audio requests'}</div>
+        </div>
+
+        <div style={{
+          background: t.compactBg, border: `1px solid ${t.hair}`,
+          borderRadius: 8, padding: '8px 10px',
+        }}>
+          <div style={{
+            fontFamily: TD_FONTS.serif, fontStyle: 'italic',
+            fontSize: 10, color: t.dim, marginBottom: 3,
+          }}>Burn rate</div>
+          <div style={{
+            fontFamily: TD_FONTS.mono, fontSize: 15, color: burnTone,
+            fontVariantNumeric: 'tabular-nums', lineHeight: 1,
+          }}>{fmtInt(Math.round(burnHour))}/hr</div>
+          <div style={{
+            fontFamily: TD_FONTS.serif, fontStyle: 'italic',
+            fontSize: 9.5, color: t.dim, marginTop: 4,
+          }}>last 60 min</div>
+        </div>
+
+        <div style={{
+          background: t.compactBg, border: `1px solid ${t.hair}`,
+          borderRadius: 8, padding: '8px 10px',
+        }}>
+          <div style={{
+            fontFamily: TD_FONTS.serif, fontStyle: 'italic',
+            fontSize: 10, color: t.dim, marginBottom: 3,
+          }}>Remaining</div>
+          <div style={{
+            fontFamily: TD_FONTS.mono, fontSize: 15, color: t.ink,
+            fontVariantNumeric: 'tabular-nums', lineHeight: 1,
+          }}>{remain == null ? '—' : fmtInt(remain)}</div>
+          <div style={{
+            fontFamily: TD_FONTS.serif, fontStyle: 'italic',
+            fontSize: 9.5, color: t.dim, marginTop: 4,
+            whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+          }}>
+            {limit ? `of ${fmtInt(limit)}` : 'probing…'}
+            {d.rpdReset != null && <> · resets {fmtReset(d.rpdReset)}</>}
+          </div>
+        </div>
+      </div>
+
+      {/* Daily-bucket progress bar — single honest ratio: used / limit. */}
+      {limit != null && usedPctOfLimit != null && (
+        <div style={{ marginBottom: 14 }}>
+          <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 4 }}>
+            <div style={{
+              fontFamily: TD_FONTS.serif, fontStyle: 'italic', fontSize: 11, color: t.ink,
+            }}>Daily audio quota</div>
+            <div style={{
+              fontFamily: TD_FONTS.mono, fontSize: 10, color: t.dim,
+              fontVariantNumeric: 'tabular-nums',
+            }}>{usedPctOfLimit}% used · {fmtInt(remain)} left</div>
+          </div>
+          <div style={{
+            height: 5, background: t.hair, borderRadius: 3, overflow: 'hidden',
+          }}>
+            <div style={{
+              height: '100%',
+              width: `${Math.min(100, usedPctOfLimit)}%`,
+              background: usedPctOfLimit >= 95 ? (dark ? TD.dRed : TD.red)
+                        : usedPctOfLimit >= 85 ? (dark ? TD.dCoral : TD.coral)
+                        : (dark ? TD.dGreen : TD.green),
+              transition: 'width 300ms ease',
+            }} />
+          </div>
+        </div>
+      )}
+
+      {/* 24h hourly burn chart. */}
+      <div style={{ marginBottom: 14 }}>
+        <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 6 }}>
+          <div style={{
+            fontFamily: TD_FONTS.serif, fontStyle: 'italic', fontSize: 11.5, color: t.ink,
+          }}>Today · hourly requests</div>
+          <div style={{
+            fontFamily: TD_FONTS.serif, fontStyle: 'italic', fontSize: 10, color: t.dim,
+          }}>{hasTodayBurn ? 'hover for detail' : 'no audio traffic yet today'}</div>
+        </div>
+        <HoverBarChart
+          t={t}
+          bars={hourlyBurn.length === 24
+            ? hourlyBurn.map(v => ({ value: v, color: dark ? TD.dCoral : TD.coral }))
+            : Array.from({ length: 24 }, () => ({ value: 0 }))}
+          heightPx={48}
+          gap={2}
+          tooltipLabel={hourTip}
+          axisLabels={hourLabels}
+        />
+      </div>
+
+      {/* Honest footer — explains the probe, links to console. */}
+      <div style={{
+        paddingTop: 10, borderTop: `1px solid ${t.hair}`,
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8,
+      }}>
+        <div style={{
+          fontFamily: TD_FONTS.serif, fontStyle: 'italic',
+          fontSize: 10, color: t.dim, lineHeight: 1.4, flex: 1, minWidth: 0,
+        }}>
+          Groq has no usage API — audio quota is read from response headers via a silent-WAV probe every 15 min.
+          {probedLabel && <> · <span style={{ fontFamily: TD_FONTS.mono }}>{probedLabel}</span></>}
+        </div>
+        <button
+          onClick={openConsole}
+          style={{
+            appearance: 'none', border: `1px solid ${t.hair}`,
+            background: 'transparent', cursor: 'pointer',
+            fontFamily: TD_FONTS.serif, fontStyle: 'italic',
+            fontSize: 10, color: t.muted,
+            padding: '3px 9px', borderRadius: 10, whiteSpace: 'nowrap',
+          }}>
+          Open Groq console ↗
+        </button>
+      </div>
+
+      {/* Models — collapsible one-liner, grouped by family. */}
+      {modelIds.length > 0 && (
+        <div style={{ marginTop: 4, paddingTop: 8, borderTop: `1px solid ${t.hair}` }}>
+          <button
+            onClick={(e) => { e.stopPropagation(); setModelsOpen(v => !v); }}
+            style={{
+              appearance: 'none', border: 'none', background: 'transparent',
+              padding: 0, cursor: 'pointer', textAlign: 'left',
+              display: 'flex', alignItems: 'center', gap: 4,
+              fontFamily: TD_FONTS.serif, fontStyle: 'italic',
+              fontSize: 10, color: t.dim,
+            }}>
+            <span style={{
+              display: 'inline-block',
+              transform: modelsOpen ? 'rotate(90deg)' : 'rotate(0deg)',
+              transition: 'transform 150ms ease', fontSize: 8,
+            }}>▸</span>
+            <span>{modelIds.length} models on this key</span>
+          </button>
+          {modelsOpen && (
+            modelGroups.length > 0 ? (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 6 }}>
+                {modelGroups.map((g, i) => (
+                  <div key={i} style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
+                    <span style={{
+                      flex: '0 0 56px',
+                      fontFamily: TD_FONTS.mono, fontSize: 10, color: t.ink, fontWeight: 600,
+                      paddingTop: 3,
+                    }}>{g.label}</span>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 3, flex: 1 }}>
+                      {(g.ids || []).map((id, j) => (
+                        <span key={j} style={{
+                          fontFamily: TD_FONTS.mono, fontSize: 9.5, color: t.dim,
+                          background: dark ? 'rgba(237,230,214,0.03)' : 'rgba(60,45,30,0.03)',
+                          padding: '1px 6px', borderRadius: 8,
+                          border: `1px solid ${t.hair}`, whiteSpace: 'nowrap',
+                        }}>{id}</span>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 3, marginTop: 6 }}>
+                {modelIds.map((id, i) => (
+                  <span key={i} style={{
+                    fontFamily: TD_FONTS.mono, fontSize: 9.5, color: t.dim,
+                    background: dark ? 'rgba(237,230,214,0.03)' : 'rgba(60,45,30,0.03)',
+                    padding: '1px 6px', borderRadius: 8,
+                    border: `1px solid ${t.hair}`, whiteSpace: 'nowrap',
+                  }}>{id}</span>
+                ))}
+              </div>
+            )
+          )}
+        </div>
+      )}
+    </div>
   );
 }
 

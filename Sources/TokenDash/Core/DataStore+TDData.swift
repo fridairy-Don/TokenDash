@@ -230,7 +230,10 @@ extension DataStore {
                  "avgChars", "maxCharsReq",
                  "reqsToday", "reqs7d", "daysLeft",
                  "playSessions", "speechSeconds", "longestSessionSec",
-                 "promptTokens7d", "completionTokens7d":
+                 "promptTokens7d", "completionTokens7d",
+                 "rpdRemain", "rpdLimit", "rpdReset",
+                 "tpmRemain", "tpmLimit", "tpmReset",
+                 "probedSecondsAgo", "modelsCount":
                 if let n = Int(v) { out[k] = n } else { out[k] = v }
             default:
                 out[k] = v

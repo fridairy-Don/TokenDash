@@ -552,26 +552,5 @@ final class OpenRouterProvider: UsageProvider {
     }
 }
 
-// MARK: - Groq ---------------------------------------------------------------
-//
-// Groq has no public quota/usage endpoint. We just acknowledge the stored key
-// and let the user know the card will light up once we add proxy logging (M3+).
-
-final class GroqProvider: UsageProvider {
-    let id = "groq"
-    let displayName = "Groq"
-
-    func snapshot() async -> ProviderSnapshot {
-        let hasKey = KeyStore.hasKey(account: id)
-        return ProviderSnapshot(
-            id: id, title: displayName, subtitle: "Free tier",
-            glyph: "G", accent: .slate, size: .compact,
-            headline: "—",
-            headlineCaption: hasKey ? "key stored" : "no usage API",
-            state: .unconfigured,
-            note: hasKey
-                ? "key stored — Groq has no usage API yet"
-                : "no usage API — key not stored"
-        )
-    }
-}
+// GroqProvider has moved to Providers/GroqProvider.swift — it's no longer a
+// stub now that it actually fetches rate-limit headers and the model catalog.

@@ -67,6 +67,24 @@ actor APIClient {
         catch { throw APIError.decode(error) }
     }
 
+    /// POST with body + headers. Returns the full HTTPURLResponse alongside
+    /// the body so callers can read response headers (e.g. Groq's x-ratelimit-*
+    /// which is the ONLY way to surface live quota).
+    func postWithHeaders(url: URL,
+                        body: Data,
+                        headers: [String: String] = [:],
+                        timeout: TimeInterval? = nil) async throws -> (Data, HTTPURLResponse) {
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.httpBody = body
+        if let timeout { req.timeoutInterval = timeout }
+        for (k, v) in headers { req.setValue(v, forHTTPHeaderField: k) }
+        if req.value(forHTTPHeaderField: "Content-Type") == nil {
+            req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        }
+        return try await performWithResponse(req)
+    }
+
     // MARK: - Core
 
     private func perform(_ request: URLRequest) async throws -> Data {
@@ -94,6 +112,54 @@ actor APIClient {
                         continue
                     }
                 }
+                throw APIError.httpStatus(code, data)
+            } catch let urlErr as URLError {
+                lastErr = .transport(urlErr)
+                if Self.isTransient(urlErr) && attempt < maxAttempts {
+                    let wait = Self.backoff(attempt)
+                    try? await Task.sleep(nanoseconds: UInt64(wait * 1_000_000_000))
+                    continue
+                }
+                throw APIError.transport(urlErr)
+            } catch let e as APIError {
+                throw e
+            } catch {
+                throw APIError.giveUp(error.localizedDescription)
+            }
+        }
+        throw lastErr ?? .giveUp("unknown")
+    }
+
+    /// Same retry/backoff/throttle as `perform` but returns the full response
+    /// instead of just the body. Used when callers need response headers.
+    private func performWithResponse(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+        let host = request.url?.host ?? ""
+        await throttle(host: host)
+
+        var attempt = 0
+        let maxAttempts = 3
+        var lastErr: APIError?
+
+        while attempt < maxAttempts {
+            attempt += 1
+            do {
+                let (data, response) = try await session.data(for: request)
+                guard let http = response as? HTTPURLResponse else {
+                    lastErr = .giveUp("non-HTTP response")
+                    break
+                }
+                let code = http.statusCode
+                if (200..<300).contains(code) { return (data, http) }
+                if code == 429 || (500..<600).contains(code) {
+                    let wait = Self.retryAfter(http) ?? Self.backoff(attempt)
+                    if attempt < maxAttempts {
+                        try? await Task.sleep(nanoseconds: UInt64(wait * 1_000_000_000))
+                        continue
+                    }
+                }
+                // Return non-2xx with headers so caller can still read rate-limit
+                // info from a 429 (that's actually the most useful 429 to parse).
+                if code == 429 { return (data, http) }
                 throw APIError.httpStatus(code, data)
             } catch let urlErr as URLError {
                 lastErr = .transport(urlErr)
