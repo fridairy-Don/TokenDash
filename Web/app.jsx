@@ -2949,32 +2949,60 @@ function useOrder(key, defaultOrder) {
 
 // FLIP animation: measure each draggable's rect before/after order changes,
 // then play the inverse translate so the browser animates it back to 0.
-// Drag implementation rewritten around pointer events for reliability —
-// HTML5 drag-and-drop silently failed on Moonshot/GitHub/Vercel in
-// WKWebView. This version avoids every known quirk by:
-//   • using pointer events (fire unconditionally)
-//   • calling setOrder *once*, at drop time (not mid-drag, which caused
-//     the cascading re-renders that corrupted layout last attempt)
-//   • handing the FLIP animation the dragged-position rect so release
-//     animates smoothly to the new slot instead of teleporting
+// Sortable-style drag with live reordering. As the cursor passes over a
+// sibling, that sibling animates out of the way via FLIP, without waiting
+// for drop. Keys to making this stable (earlier attempts caused layout
+// chaos):
+//
+//   • Grip-based transform: we remember the cursor's offset within the
+//     card at drag start, then on each frame compute the card's natural
+//     position (by temporarily clearing its transform) and set a new
+//     transform that keeps the card anchored under the cursor. When a
+//     reorder moves the card to a new DOM slot, the recompute puts the
+//     transform in the right place automatically — no offset drift.
+//
+//   • FLIP skips the dragged card (activeRef.current gate). Siblings
+//     FLIP normally, animating smoothly into their new slots.
+//
+//   • lastTargetRef throttles reorders to "only when the target changes",
+//     preventing the cascade of state updates that broke layout before.
+//
+//   • After drop, we transition the dragged card's transform back to ''
+//     so it settles into its final slot instead of snapping.
 function Draggable({ id, group, order, setOrder, t, children }) {
   const ref = React.useRef(null);
   const prevRectRef = React.useRef(null);
   const [dragging, setDragging] = React.useState(false);
 
-  // Drag state kept in refs so mid-drag re-renders don't wipe it.
-  const startRef = React.useRef(null);      // { x, y } on pointerdown
-  const activeRef = React.useRef(false);    // has drag threshold been crossed?
-  // Briefly suppresses the click that fires right after pointerup so the
-  // drop doesn't also toggle the card's drawer.
+  // All drag state lives in refs so mid-drag re-renders don't clobber it.
+  const startRef = React.useRef(null);       // cursor {x,y} at pointerdown (for activation threshold only)
+  const gripRef = React.useRef({ x: 0, y: 0 }); // cursor - card top-left at drag activation
+  const lastCursorRef = React.useRef(null);  // latest pointermove position, for re-anchor on re-render
+  const activeRef = React.useRef(false);
+  const lastTargetRef = React.useRef(null);  // most recent sibling we reordered past
   const justDraggedRef = React.useRef(false);
 
+  // FLIP animation — only runs on cards that are NOT the one being dragged.
+  // For the dragged card, re-anchor its transform to the last cursor
+  // position so a mid-drag reorder doesn't leave it visually offset for a
+  // frame before the next pointermove catches up.
   React.useLayoutEffect(() => {
     const el = ref.current;
     if (!el) return;
+    if (activeRef.current && lastCursorRef.current) {
+      el.style.transition = 'none';
+      el.style.transform = '';
+      const nat = el.getBoundingClientRect();
+      const c = lastCursorRef.current;
+      const tx = (c.x - gripRef.current.x) - nat.left;
+      const ty = (c.y - gripRef.current.y) - nat.top;
+      el.style.transform = `translate(${tx}px, ${ty}px)`;
+      prevRectRef.current = el.getBoundingClientRect();
+      return;
+    }
     const prev = prevRectRef.current;
     const curr = el.getBoundingClientRect();
-    if (prev && !activeRef.current && (prev.top !== curr.top || prev.left !== curr.left)) {
+    if (prev && (prev.top !== curr.top || prev.left !== curr.left)) {
       const dx = prev.left - curr.left;
       const dy = prev.top - curr.top;
       el.style.transition = 'none';
@@ -2986,7 +3014,7 @@ function Draggable({ id, group, order, setOrder, t, children }) {
     prevRectRef.current = curr;
   });
 
-  // Find which sibling (in the same group) the cursor is over at drop.
+  // Returns the id of the sibling card whose rect contains (x, y), or null.
   const findTargetId = (x, y) => {
     const all = document.querySelectorAll(`[data-drag-group="${group}"]`);
     for (const el of all) {
@@ -2999,11 +3027,28 @@ function Draggable({ id, group, order, setOrder, t, children }) {
     return null;
   };
 
+  // Recompute the translate() for the dragged card so its top-left sits at
+  // (cursor.x - grip.x, cursor.y - grip.y) regardless of where React has
+  // just placed it in the DOM after a reorder.
+  const anchorToCursor = (x, y) => {
+    const el = ref.current;
+    if (!el) return;
+    // Clear transform so getBoundingClientRect returns the current *natural*
+    // position of the card in its new DOM slot.
+    el.style.transition = 'none';
+    el.style.transform = '';
+    const nat = el.getBoundingClientRect();
+    const tx = (x - gripRef.current.x) - nat.left;
+    const ty = (y - gripRef.current.y) - nat.top;
+    el.style.transform = `translate(${tx}px, ${ty}px)`;
+  };
+
   const onPointerDown = (e) => {
     if (e.pointerType === 'mouse' && e.button !== 0) return;
     if (e.target.closest('input, button, a, textarea, select')) return;
     startRef.current = { x: e.clientX, y: e.clientY };
     activeRef.current = false;
+    lastTargetRef.current = null;
     try { ref.current.setPointerCapture(e.pointerId); } catch (err) {}
   };
 
@@ -3012,42 +3057,35 @@ function Draggable({ id, group, order, setOrder, t, children }) {
     if (!start) return;
     const dx = e.clientX - start.x;
     const dy = e.clientY - start.y;
+
+    // Activation: only start dragging once the pointer has moved enough to
+    // clearly indicate intent — keeps single clicks from feeling "grabby".
     if (!activeRef.current) {
       if (Math.abs(dx) + Math.abs(dy) < 5) return;
       activeRef.current = true;
       setDragging(true);
+      // Capture grip once: where inside the card the cursor grabbed.
+      const el = ref.current;
+      if (el) {
+        const r = el.getBoundingClientRect();
+        gripRef.current = { x: e.clientX - r.left, y: e.clientY - r.top };
+        el.style.zIndex = '10';
+        el.style.pointerEvents = 'none';   // hit-test passes through to siblings
+      }
     }
-    const el = ref.current;
-    if (el) {
-      el.style.transition = 'none';
-      el.style.transform = `translate(${dx}px, ${dy}px)`;
-      el.style.zIndex = '10';
-      el.style.pointerEvents = 'none';  // cursor falls through to siblings
-    }
-  };
 
-  const onPointerUp = (e) => {
-    const wasActive = activeRef.current;
-    const el = ref.current;
-    startRef.current = null;
-    activeRef.current = false;
+    // Remember cursor pos so useLayoutEffect can re-anchor after re-renders.
+    lastCursorRef.current = { x: e.clientX, y: e.clientY };
+    // Keep the card under the cursor. Recomputing against current natural
+    // position means reorders don't leave stale offsets behind.
+    anchorToCursor(e.clientX, e.clientY);
 
-    if (el) el.style.pointerEvents = '';
-    if (!wasActive) return;   // click, not a drag — nothing to reorder
-
-    setDragging(false);
+    // Live reorder: as soon as the cursor enters a different sibling's rect,
+    // move this card to that sibling's slot. Throttled via lastTargetRef so
+    // we don't hammer setOrder every move frame.
     const targetId = findTargetId(e.clientX, e.clientY);
-
-    if (el) {
-      // Capture the card's current visual rect (still translated) so the
-      // FLIP useLayoutEffect below animates from here to the new slot.
-      prevRectRef.current = el.getBoundingClientRect();
-      el.style.transition = 'none';
-      el.style.transform = '';
-      el.style.zIndex = '';
-    }
-
-    if (targetId) {
+    if (targetId && targetId !== id && targetId !== lastTargetRef.current) {
+      lastTargetRef.current = targetId;
       setOrder(ord => {
         const next = ord.slice();
         const from = next.indexOf(id);
@@ -3057,10 +3095,42 @@ function Draggable({ id, group, order, setOrder, t, children }) {
         next.splice(to, 0, id);
         return next;
       });
+      // The React render hasn't happened yet. After it does, the useLayoutEffect
+      // will FLIP the displaced sibling into position. On the next pointermove
+      // we re-anchor this card, so no offset drift.
     }
-    // Arm the "just dragged" flag for the click that will fire right after
-    // pointerup, so the drop doesn't also toggle the drawer. Clear on the
-    // next tick — future clicks are unrelated and must work normally.
+  };
+
+  const onPointerUp = (e) => {
+    const wasActive = activeRef.current;
+    const el = ref.current;
+    startRef.current = null;
+
+    if (!wasActive) {
+      activeRef.current = false;
+      if (el) el.style.pointerEvents = '';
+      return;   // just a click — let it through
+    }
+
+    // Animate the card from its current cursor-anchored visual position
+    // down to the natural top-left of its final DOM slot.
+    if (el) {
+      el.style.transition = 'transform 200ms cubic-bezier(0.2, 0.8, 0.2, 1)';
+      el.style.transform = '';
+      el.style.zIndex = '';
+      el.style.pointerEvents = '';
+      // Clear after the animation finishes so we don't leave a lingering
+      // transition on the element.
+      setTimeout(() => {
+        if (el) el.style.transition = 'none';
+      }, 220);
+    }
+    activeRef.current = false;
+    setDragging(false);
+    lastTargetRef.current = null;
+    lastCursorRef.current = null;
+
+    // Suppress the synthetic click that fires right after mouseup.
     justDraggedRef.current = true;
     setTimeout(() => { justDraggedRef.current = false; }, 0);
     e.stopPropagation();
@@ -3071,6 +3141,8 @@ function Draggable({ id, group, order, setOrder, t, children }) {
     startRef.current = null;
     activeRef.current = false;
     setDragging(false);
+    lastTargetRef.current = null;
+    lastCursorRef.current = null;
     if (el) {
       el.style.transition = 'transform 180ms cubic-bezier(0.2, 0.8, 0.2, 1)';
       el.style.transform = '';
