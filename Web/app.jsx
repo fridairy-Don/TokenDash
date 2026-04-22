@@ -2922,8 +2922,29 @@ function useOrder(key, defaultOrder) {
     const added = defaultOrder.filter(id => !kept.includes(id));
     return [...kept, ...added];
   }, [order, defaultOrder.join('|')]);
+
+  // Wrapper around setOrder that feeds the reconciled list (what the UI is
+  // actually rendering) into the updater — NOT the raw state. Without this,
+  // Draggable's reorder callback sees the stale localStorage-backed order
+  // that doesn't include any providers added at runtime, so indexOf returns
+  // -1 for every new provider and the whole reorder silently no-ops.
+  //
+  // This was the bug that made Moonshot/GitHub/Vercel "un-draggable": drag
+  // events fired correctly, findTargetId found the right neighbour, setOrder
+  // was called with a working updater — but the updater saw a list that
+  // didn't contain the dragged id, so it returned unchanged.
+  const setOrderReconciled = React.useCallback((updater) => {
+    setOrder(curr => {
+      const liveReconciled = [
+        ...curr.filter(id => defaultOrder.includes(id)),
+        ...defaultOrder.filter(id => !curr.includes(id)),
+      ];
+      return typeof updater === 'function' ? updater(liveReconciled) : updater;
+    });
+  }, [defaultOrder.join('|')]);
+
   const reset = React.useCallback(() => setOrder(defaultOrder.slice()), [defaultOrder.join('|')]);
-  return [reconciled, setOrder, reset];
+  return [reconciled, setOrderReconciled, reset];
 }
 
 // FLIP animation: measure each draggable's rect before/after order changes,
@@ -2984,7 +3005,6 @@ function Draggable({ id, group, order, setOrder, t, children }) {
     startRef.current = { x: e.clientX, y: e.clientY };
     activeRef.current = false;
     try { ref.current.setPointerCapture(e.pointerId); } catch (err) {}
-    try { postSwift('log:DRAG[' + id + '] pointerdown'); } catch (err) {}
   };
 
   const onPointerMove = (e) => {
@@ -3027,7 +3047,6 @@ function Draggable({ id, group, order, setOrder, t, children }) {
       el.style.zIndex = '';
     }
 
-    try { postSwift('log:DRAG[' + id + '] dropped, target=' + (targetId || 'null')); } catch (err) {}
     if (targetId) {
       setOrder(ord => {
         const next = ord.slice();
