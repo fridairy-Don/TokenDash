@@ -2899,7 +2899,12 @@ function LimitRow({ t, label, value }) {
 //
 // Module-level drag state: HTML5 DnD doesn't let us read dataTransfer during
 // dragover (only during drop), so we stash the active drag here.
-const _dragState = { group: null, id: null };
+// group + id: which card is being dragged right now.
+// lastTargetId: which sibling triggered the most recent reorder. Prevents
+// the onDragOver feed from firing setOrder 30+ times per second against
+// the same target, which causes React-batched updates to oscillate (swap
+// → un-swap → swap) and produce the flicker you see during drag.
+const _dragState = { group: null, id: null, lastTargetId: null };
 
 function useOrder(key, defaultOrder) {
   const [order, setOrder] = React.useState(() => {
@@ -2968,21 +2973,23 @@ function Draggable({ id, group, order, setOrder, t, children }) {
   const prevRectRef = React.useRef(null);
   const [dragging, setDragging] = React.useState(false);
 
-  // FLIP animation: on every render, if this card's layout position
-  // changed since the previous render (other than because of its own
-  // active drag), snap to the old position and animate to the new one.
+  // FLIP: on every render, if this card's layout slot changed, snap it
+  // back to the old rect and animate to the new one. Applies to the
+  // dragged card too — that's what makes the semi-transparent "drop
+  // indicator" slide smoothly between slots instead of jumping, which
+  // was the main source of perceived flicker during a drag.
   React.useLayoutEffect(() => {
     const el = ref.current;
     if (!el) return;
     const prev = prevRectRef.current;
     const curr = el.getBoundingClientRect();
-    if (prev && !dragging && (prev.top !== curr.top || prev.left !== curr.left)) {
+    if (prev && (prev.top !== curr.top || prev.left !== curr.left)) {
       const dx = prev.left - curr.left;
       const dy = prev.top - curr.top;
       el.style.transition = 'none';
       el.style.transform = `translate(${dx}px, ${dy}px)`;
       void el.offsetHeight;
-      el.style.transition = 'transform 260ms cubic-bezier(0.2, 0.8, 0.2, 1)';
+      el.style.transition = 'transform 220ms cubic-bezier(0.2, 0.8, 0.2, 1)';
       el.style.transform = '';
     }
     prevRectRef.current = curr;
@@ -3008,6 +3015,7 @@ function Draggable({ id, group, order, setOrder, t, children }) {
       onDragStart={(e) => {
         _dragState.group = group;
         _dragState.id = id;
+        _dragState.lastTargetId = null;
         e.dataTransfer.effectAllowed = 'move';
         try { e.dataTransfer.setData('text/plain', id); } catch (err) {}
         setTimeout(() => setDragging(true), 0);
@@ -3016,12 +3024,16 @@ function Draggable({ id, group, order, setOrder, t, children }) {
         setDragging(false);
         _dragState.group = null;
         _dragState.id = null;
+        _dragState.lastTargetId = null;
       }}
       onDragOver={(e) => {
         if (_dragState.group !== group || _dragState.id == null) return;
         e.preventDefault();
         e.dataTransfer.dropEffect = 'move';
-        if (_dragState.id !== id) reorder(_dragState.id);
+        if (_dragState.id === id) return;                 // self, nothing to do
+        if (_dragState.lastTargetId === id) return;       // already reordered past this target
+        _dragState.lastTargetId = id;
+        reorder(_dragState.id);
       }}
       onDrop={(e) => {
         if (_dragState.group !== group) return;
