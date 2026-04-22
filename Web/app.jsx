@@ -2974,18 +2974,23 @@ function useOrder(key, defaultOrder) {
 //     corrupted layout in earlier attempts came from unthrottled setOrder.
 function Draggable({ id, group, order, setOrder, t, children }) {
   const ref = React.useRef(null);
-  const prevRectRef = React.useRef(null);
+  // Natural (layout-only) position for FLIP tracking. Uses offsetTop/offsetLeft
+  // which are immune to transform/animation — avoids the classic mid-flight
+  // FLIP cascade where getBoundingClientRect returns animated rectangles.
+  const prevNatRef = React.useRef(null);
   const [dragging, setDragging] = React.useState(false);
 
-  // All drag state lives in refs so mid-drag re-renders don't clobber it.
-  const dragStartRef = React.useRef(null);   // { cursorX, cursorY, offsetX, offsetY } at activation
-  const lastCursorRef = React.useRef(null);  // latest pointer pos, for useLayoutEffect re-anchor
+  const dragStartRef = React.useRef(null);
+  const lastCursorRef = React.useRef(null);
   const activeRef = React.useRef(false);
+  // True for the 220 ms release animation after drop so useLayoutEffect
+  // doesn't overwrite the release transition with a FLIP.
+  const recentlyReleasedRef = React.useRef(false);
   const lastTargetRef = React.useRef(null);
   const justDraggedRef = React.useRef(false);
 
-  // Apply the transform that keeps the dragged card under the cursor.
-  // Pure arithmetic — reads only offsetLeft/offsetTop (no reflow cost).
+  // Pure-arithmetic transform to keep the dragged card under the cursor.
+  // Reads only offsetLeft/offsetTop — no reflow.
   const applyDragTransform = (cursorX, cursorY) => {
     const el = ref.current;
     const ds = dragStartRef.current;
@@ -3000,19 +3005,24 @@ function Draggable({ id, group, order, setOrder, t, children }) {
     const el = ref.current;
     if (!el) return;
 
-    // Dragged card: re-apply the cursor-anchored transform against its
-    // new DOM slot before the browser paints. Covers the gap between a
-    // mid-drag reorder and the next pointermove that would otherwise
-    // show the card at (new natural pos + stale transform).
-    if (activeRef.current && lastCursorRef.current && dragStartRef.current) {
-      applyDragTransform(lastCursorRef.current.x, lastCursorRef.current.y);
-      prevRectRef.current = el.getBoundingClientRect();
+    // The dragged card and the just-released card both manage their own
+    // transforms — FLIP must never touch them. A FLIP applied while the
+    // release transition is running is exactly what piled up into the
+    // "cards scattered across the screen" layout bug.
+    if (activeRef.current || recentlyReleasedRef.current) {
+      if (activeRef.current && lastCursorRef.current && dragStartRef.current) {
+        applyDragTransform(lastCursorRef.current.x, lastCursorRef.current.y);
+      }
+      prevNatRef.current = { top: el.offsetTop, left: el.offsetLeft };
       return;
     }
 
-    // All other cards: FLIP from previous rect to current rect.
-    const prev = prevRectRef.current;
-    const curr = el.getBoundingClientRect();
+    // Sibling FLIP — using NATURAL layout coordinates (offsetTop/offsetLeft).
+    // Because they ignore transform/animation, comparing prev vs curr
+    // across renders always yields a layout delta, never a mid-animation
+    // spurious delta that would restart the FLIP on top of itself.
+    const prev = prevNatRef.current;
+    const curr = { top: el.offsetTop, left: el.offsetLeft };
     if (prev && (prev.top !== curr.top || prev.left !== curr.left)) {
       const dx = prev.left - curr.left;
       const dy = prev.top - curr.top;
@@ -3022,7 +3032,7 @@ function Draggable({ id, group, order, setOrder, t, children }) {
       el.style.transition = 'transform 260ms cubic-bezier(0.2, 0.8, 0.2, 1)';
       el.style.transform = '';
     }
-    prevRectRef.current = curr;
+    prevNatRef.current = curr;
   });
 
   const findTargetId = (x, y) => {
@@ -3104,17 +3114,32 @@ function Draggable({ id, group, order, setOrder, t, children }) {
       return;
     }
 
+    // Hand off from "drag in progress" to "release in progress". The
+    // recentlyReleased flag tells useLayoutEffect to leave our transform
+    // alone for the duration of the release animation. Without this flag,
+    // setDragging(false) triggers a re-render whose useLayoutEffect would
+    // take the FLIP branch and overwrite the release transition.
+    activeRef.current = false;
+    recentlyReleasedRef.current = true;
+    lastCursorRef.current = null;
+    lastTargetRef.current = null;
+
     if (el) {
       el.style.transition = 'transform 200ms cubic-bezier(0.2, 0.8, 0.2, 1)';
       el.style.transform = '';
       el.style.zIndex = '';
       el.style.pointerEvents = '';
-      setTimeout(() => { if (el) el.style.transition = 'none'; }, 220);
     }
-    activeRef.current = false;
+
+    setTimeout(() => {
+      recentlyReleasedRef.current = false;
+      if (el) {
+        el.style.transition = 'none';
+        prevNatRef.current = { top: el.offsetTop, left: el.offsetLeft };
+      }
+    }, 220);
+
     setDragging(false);
-    lastTargetRef.current = null;
-    lastCursorRef.current = null;
 
     justDraggedRef.current = true;
     setTimeout(() => { justDraggedRef.current = false; }, 0);
@@ -3125,6 +3150,7 @@ function Draggable({ id, group, order, setOrder, t, children }) {
     const el = ref.current;
     dragStartRef.current = null;
     activeRef.current = false;
+    recentlyReleasedRef.current = false;
     setDragging(false);
     lastTargetRef.current = null;
     lastCursorRef.current = null;
