@@ -206,12 +206,12 @@ extension DataStore {
             switch k {
             case "pct":
                 if let n = Int(v) { out[k] = n } else { out[k] = v }
-            case "history7":
+            case "history7", "balance7", "hourlyBalance", "hourlyBurn":
                 let nums = v.split(separator: ",").compactMap { Double($0) }
-                if !nums.isEmpty { out["history7"] = nums }
+                if !nums.isEmpty { out[k] = nums }
             case "historyMax":
                 if let n = Double(v) { out["historyMax"] = n }
-            case "topModels", "topProjects", "topVoices", "allModels", "dailySpend", "rateBuckets", "models":
+            case "topModels", "topProjects", "topVoices", "allModels", "dailySpend", "rateBuckets", "models", "modelGroups":
                 if let data = v.data(using: .utf8),
                    let arr = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] {
                     out[k] = arr

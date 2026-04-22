@@ -237,6 +237,58 @@ final class PersistentStore {
         return out
     }
 
+    /// All intraday snapshots (ts, credits) for a provider since start-of-today.
+    /// Oldest first. Used to compute "today's burn so far" and the 24h balance
+    /// chart — we refresh every 30s so a full day has ~2,880 points.
+    func intradayCredits(provider: String) -> [(ts: Date, credits: Double)] {
+        guard openedOK else { return [] }
+        let startOfToday = Int(Calendar.current.startOfDay(for: Date()).timeIntervalSince1970)
+        let sql = """
+        SELECT ts, credits_usd FROM snapshots
+        WHERE provider = ? AND ts >= ? AND credits_usd IS NOT NULL
+        ORDER BY ts ASC;
+        """
+        var out: [(Date, Double)] = []
+        queue.sync { [db] in
+            var sb: OpaquePointer?
+            if sqlite3_prepare_v2(db, sql, -1, &sb, nil) == SQLITE_OK {
+                sqlite3_bind_text(sb, 1, provider, -1, Self.SQLITE_TRANSIENT)
+                sqlite3_bind_int64(sb, 2, Int64(startOfToday))
+                while sqlite3_step(sb) == SQLITE_ROW {
+                    let ts = Date(timeIntervalSince1970: TimeInterval(sqlite3_column_int64(sb, 0)))
+                    let credits = sqlite3_column_double(sb, 1)
+                    out.append((ts, credits))
+                }
+            }
+            sqlite3_finalize(sb)
+        }
+        return out
+    }
+
+    /// Credits snapshot closest to `t` going backward (most-recent sample at-or-before).
+    /// Used for "1h ago" / "24h ago" baselines when computing burn rate.
+    func creditsAt(provider: String, atOrBefore t: Date) -> Double? {
+        guard openedOK else { return nil }
+        let sql = """
+        SELECT credits_usd FROM snapshots
+        WHERE provider = ? AND credits_usd IS NOT NULL AND ts <= ?
+        ORDER BY ts DESC LIMIT 1;
+        """
+        var out: Double?
+        queue.sync { [db] in
+            var sb: OpaquePointer?
+            if sqlite3_prepare_v2(db, sql, -1, &sb, nil) == SQLITE_OK {
+                sqlite3_bind_text(sb, 1, provider, -1, Self.SQLITE_TRANSIENT)
+                sqlite3_bind_int64(sb, 2, Int64(t.timeIntervalSince1970))
+                if sqlite3_step(sb) == SQLITE_ROW {
+                    out = sqlite3_column_double(sb, 0)
+                }
+            }
+            sqlite3_finalize(sb)
+        }
+        return out
+    }
+
     /// Per-day deltas for spend — computed on the fly because we store
     /// *cumulative* spend, and the sparkline wants daily burn.
     func dailySpendDeltas(provider: String, days: Int = 7) -> [Double] {

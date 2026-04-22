@@ -2012,148 +2012,227 @@ function VD2_MoonshotDrawer({ t, d }) {
   const [modelsOpen, setModelsOpen] = React.useState(false);
   const dark = t.ink === VD2_DARK.ink;
   const modelIds = d.modelIds || [];
-  const history7 = d.history7 || [];
+  const history7 = d.history7 || [];          // daily spend deltas
+  const hourlyBurn = d.hourlyBurn || [];      // 24 hours of spend drops (today)
+  const hourlyBalance = d.hourlyBalance || []; // 24 hours of end-of-hour balance
   const currency = d.currency || '$';
   const fmtMoney = (n) => {
     const v = n || 0;
+    if (currency === '$' && v > 0 && v < 1) return `$${v.toFixed(4)}`;
     return `${currency}${v.toFixed(2)}`;
   };
 
-  // 7-day spend chart. Same primitive as OpenRouter's so the two feel
-  // consistent when you tab between drawers.
-  const bars = history7.map(v => ({ value: v }));
-  const dayLabels = [];
-  for (let i = 6; i >= 0; i--) {
-    const d = new Date();
-    d.setDate(d.getDate() - i);
-    dayLabels.push(String(d.getDate()));
-  }
-  const tip = (i) => {
-    const v = history7[i] || 0;
-    const d = new Date();
-    d.setDate(d.getDate() - (6 - i));
-    const label = d.toLocaleDateString('en', { month: 'short', day: 'numeric' });
-    return `${label} · ${fmtMoney(v)}`;
+  const platformUrl = d.region === 'china'
+    ? 'https://platform.kimi.com'
+    : 'https://platform.kimi.ai';
+  const openPlatform = (e) => {
+    e.stopPropagation();
+    if (window.webkit?.messageHandlers?.td) {
+      window.webkit.messageHandlers.td.postMessage(`open-url:${platformUrl}`);
+    }
   };
-  const hasSpendHistory = bars.some(b => b.value > 0);
+
+  // ─── Hero stat row — this is what the user opens the drawer to see ────
+  // 3 big numbers: today's burn, hourly rate, runway.
+  const spentToday = d.spentTodayLabel || `${currency}0.00`;
+  const spentTodayNum = parseFloat(d.spentTodayNum || '0');
+  const burnHour = d.burnPerHourLabel || `${currency}0.00/hr`;
+  const burnHourNum = parseFloat(d.burnPerHourNum || '0');
+  const daysLeft = typeof d.daysLeft === 'number'
+    ? (d.daysLeft > 365 ? '365+' : `${d.daysLeft}`)
+    : '—';
+  const sinceLabel = d.sinceLabel || '';
+  const avgPerDay = d.avgPerDayLabel || `${currency}0.00`;
+
+  // ─── 24h chart (today) ────────────────────────────────────────────────
+  const hasTodayBurn = hourlyBurn.some(v => v > 0);
+  const hourTip = (i) => {
+    const v = hourlyBurn[i] || 0;
+    const bal = hourlyBalance[i] || 0;
+    const hh = String(i).padStart(2, '0');
+    if (v === 0 && bal === 0) return `${hh}:00 · no data`;
+    if (v === 0) return `${hh}:00 · ${fmtMoney(bal)} balance · idle`;
+    return `${hh}:00 · ${fmtMoney(v)} spent · ${fmtMoney(bal)} balance`;
+  };
+  const hourLabels = ['0','','','3','','','6','','','9','','','12','','','15','','','18','','','21','',''];
+
+  // ─── 7-day spend (secondary) ──────────────────────────────────────────
+  const has7d = history7.some(v => v > 0);
+  const dayFull = [];
+  const dayNums = [];
+  for (let i = 6; i >= 0; i--) {
+    const dt = new Date();
+    dt.setDate(dt.getDate() - i);
+    dayNums.push(String(dt.getDate()));
+    dayFull.push(dt.toLocaleDateString('en', { month: 'short', day: 'numeric' }));
+  }
+  const weekTip = (i) => `${dayFull[i]} · ${fmtMoney(history7[i] || 0)} spent`;
 
   return (
     <div
       onClick={(e) => e.stopPropagation()}
       style={{ marginTop: 12, paddingTop: 10, borderTop: `1px solid ${t.hair}` }}>
 
-      {/* Three tiles — the things an agent operator actually checks */}
+      {/* HERO — 3 stats. Today's burn is front-and-center with its since-label. */}
       <div style={{
-        display: 'grid', gridTemplateColumns: '1fr 1fr 1fr',
-        gap: 8, marginBottom: 10,
+        display: 'grid', gridTemplateColumns: '1.3fr 1fr 1fr',
+        gap: 8, marginBottom: 14,
       }}>
-        {[
-          {
-            k: 'Spent today',
-            v: d.spentTodayLabel || `${currency}0.00`,
-            hint: 'derived from balance',
-          },
-          {
-            k: 'Avg / day',
-            v: d.avgPerDayLabel || `${currency}0.00`,
-            hint: '7-day average',
-          },
-          {
-            k: 'Days left',
-            v: typeof d.daysLeft === 'number'
-                 ? (d.daysLeft > 365 ? '365+' : String(d.daysLeft))
-                 : '—',
-            hint: 'at current pace',
-          },
-        ].map((x, i) => (
-          <div key={i} style={{
-            background: t.compactBg, border: `1px solid ${t.hair}`,
-            borderRadius: 6, padding: '6px 8px',
-          }}>
-            <div style={{
-              fontFamily: TD_FONTS.serif, fontStyle: 'italic',
-              fontSize: 9.5, color: t.dim, marginBottom: 2,
-              whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
-            }}>{x.k}</div>
-            <div style={{
-              fontFamily: TD_FONTS.mono, fontSize: 13, color: t.ink,
-              fontVariantNumeric: 'tabular-nums',
-            }}>{x.v}</div>
-            <div style={{
-              fontFamily: TD_FONTS.serif, fontStyle: 'italic',
-              fontSize: 9, color: t.dim, marginTop: 2,
-              whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
-            }}>{x.hint}</div>
-          </div>
-        ))}
+        <div style={{
+          background: t.compactBg, border: `1px solid ${t.hair}`,
+          borderRadius: 8, padding: '8px 10px',
+        }}>
+          <div style={{
+            fontFamily: TD_FONTS.serif, fontStyle: 'italic',
+            fontSize: 10, color: t.dim, marginBottom: 3,
+          }}>Spent today</div>
+          <div style={{
+            fontFamily: TD_FONTS.mono, fontSize: 18, color: t.ink,
+            fontVariantNumeric: 'tabular-nums', letterSpacing: -0.3, lineHeight: 1,
+          }}>{spentToday}</div>
+          <div style={{
+            fontFamily: TD_FONTS.serif, fontStyle: 'italic',
+            fontSize: 9.5, color: t.dim, marginTop: 4,
+            whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+          }}>{sinceLabel || 'derived from balance'}</div>
+        </div>
+
+        <div style={{
+          background: t.compactBg, border: `1px solid ${t.hair}`,
+          borderRadius: 8, padding: '8px 10px',
+        }}>
+          <div style={{
+            fontFamily: TD_FONTS.serif, fontStyle: 'italic',
+            fontSize: 10, color: t.dim, marginBottom: 3,
+          }}>Burn rate</div>
+          <div style={{
+            fontFamily: TD_FONTS.mono, fontSize: 15, color: burnHourNum > 0 ? (dark ? TD.dCoral : TD.coral) : t.ink,
+            fontVariantNumeric: 'tabular-nums', lineHeight: 1,
+          }}>{burnHour}</div>
+          <div style={{
+            fontFamily: TD_FONTS.serif, fontStyle: 'italic',
+            fontSize: 9.5, color: t.dim, marginTop: 4,
+          }}>last 60 min</div>
+        </div>
+
+        <div style={{
+          background: t.compactBg, border: `1px solid ${t.hair}`,
+          borderRadius: 8, padding: '8px 10px',
+        }}>
+          <div style={{
+            fontFamily: TD_FONTS.serif, fontStyle: 'italic',
+            fontSize: 10, color: t.dim, marginBottom: 3,
+          }}>Runway</div>
+          <div style={{
+            fontFamily: TD_FONTS.mono, fontSize: 15, color: t.ink,
+            fontVariantNumeric: 'tabular-nums', lineHeight: 1,
+          }}>{daysLeft === '—' ? '—' : `${daysLeft}d`}</div>
+          <div style={{
+            fontFamily: TD_FONTS.serif, fontStyle: 'italic',
+            fontSize: 9.5, color: t.dim, marginTop: 4,
+            whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+          }}>@ {avgPerDay}/day</div>
+        </div>
       </div>
 
-      {/* 7-day spend trend */}
-      {hasSpendHistory ? (
-        <div style={{ marginBottom: 12 }}>
+      {/* TODAY — 24h hourly burn chart. Answers "am I running away?". */}
+      <div style={{ marginBottom: 14 }}>
+        <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 6 }}>
           <div style={{
             fontFamily: TD_FONTS.serif, fontStyle: 'italic', fontSize: 11.5, color: t.ink,
-            marginBottom: 2,
-          }}>Daily spend · last 7 days</div>
+          }}>Today · hourly burn</div>
           <div style={{
             fontFamily: TD_FONTS.serif, fontStyle: 'italic', fontSize: 10, color: t.dim,
-            marginBottom: 8,
-          }}>hover for exact amount</div>
+          }}>{hasTodayBurn ? 'hover for detail' : 'no spend recorded yet today'}</div>
+        </div>
+        <HoverBarChart
+          t={t}
+          bars={hourlyBurn.length === 24
+            ? hourlyBurn.map(v => ({ value: v, color: dark ? TD.dCoral : TD.coral }))
+            : Array.from({ length: 24 }, () => ({ value: 0 }))}
+          heightPx={48}
+          gap={2}
+          tooltipLabel={hourTip}
+          axisLabels={hourLabels}
+        />
+      </div>
+
+      {/* WEEK — 7-day spend. Only when we've got real data, no empty-state
+          noise; the 24h chart already carries its own empty-state copy. */}
+      {has7d && (
+        <div style={{ marginBottom: 14 }}>
+          <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 6 }}>
+            <div style={{
+              fontFamily: TD_FONTS.serif, fontStyle: 'italic', fontSize: 11.5, color: t.ink,
+            }}>7-day spend</div>
+            <div style={{
+              fontFamily: TD_FONTS.mono, fontSize: 10, color: t.dim, fontVariantNumeric: 'tabular-nums',
+            }}>{fmtMoney(history7.reduce((a, b) => a + b, 0))} total</div>
+          </div>
           <HoverBarChart
             t={t}
-            bars={bars.map(b => ({ ...b, color: dark ? TD.dCoral : TD.coral }))}
-            heightPx={42}
+            bars={history7.map(v => ({ value: v, color: dark ? TD.dGreen : TD.green }))}
+            heightPx={32}
             gap={4}
-            tooltipLabel={tip}
-            axisLabels={dayLabels}
+            tooltipLabel={weekTip}
+            axisLabels={dayNums}
           />
-        </div>
-      ) : (
-        // First-day install — we need ≥ 24h of balance snapshots before
-        // the chart is meaningful. Say so instead of rendering flatlined bars.
-        <div style={{
-          marginBottom: 12, padding: '10px',
-          background: t.compactBg, border: `1px solid ${t.hair}`,
-          borderRadius: 6,
-          fontFamily: TD_FONTS.serif, fontStyle: 'italic',
-          fontSize: 11, color: t.dim, textAlign: 'center', lineHeight: 1.5,
-        }}>
-          Spend chart builds up as we record balance over the coming days.
         </div>
       )}
 
-      {/* Models — collapsed by default, single-line summary → expand on tap */}
+      {/* Honest footer — the reason real per-token numbers aren't here, plus
+          a direct route to the Kimi dashboard that does have them. */}
+      <div style={{
+        paddingTop: 10, borderTop: `1px solid ${t.hair}`,
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8,
+      }}>
+        <div style={{
+          fontFamily: TD_FONTS.serif, fontStyle: 'italic',
+          fontSize: 10, color: t.dim, lineHeight: 1.4, flex: 1, minWidth: 0,
+        }}>
+          Kimi API only exposes balance — token-level usage is on the web dashboard.
+        </div>
+        <button
+          onClick={openPlatform}
+          style={{
+            appearance: 'none', border: `1px solid ${t.hair}`,
+            background: 'transparent', cursor: 'pointer',
+            fontFamily: TD_FONTS.serif, fontStyle: 'italic',
+            fontSize: 10, color: t.muted,
+            padding: '3px 9px', borderRadius: 10, whiteSpace: 'nowrap',
+          }}>
+          Open Kimi dashboard ↗
+        </button>
+      </div>
+
+      {/* Models — tucked at bottom as a collapsible one-liner. Most users
+          never need to see the catalog; it used to dominate the drawer. */}
       {modelIds.length > 0 && (
-        <div style={{ paddingTop: 8, borderTop: `1px solid ${t.hair}` }}>
+        <div style={{ marginTop: 8 }}>
           <button
             onClick={(e) => { e.stopPropagation(); setModelsOpen(v => !v); }}
             style={{
               appearance: 'none', border: 'none', background: 'transparent',
-              padding: 0, cursor: 'pointer', width: '100%', textAlign: 'left',
-              display: 'flex', alignItems: 'center', gap: 6,
+              padding: 0, cursor: 'pointer', textAlign: 'left',
+              display: 'flex', alignItems: 'center', gap: 4,
               fontFamily: TD_FONTS.serif, fontStyle: 'italic',
-              fontSize: 11, color: t.dim,
+              fontSize: 10, color: t.dim,
             }}>
             <span style={{
               display: 'inline-block',
               transform: modelsOpen ? 'rotate(90deg)' : 'rotate(0deg)',
-              transition: 'transform 150ms ease',
-              fontSize: 9, color: t.dim,
+              transition: 'transform 150ms ease', fontSize: 8,
             }}>▸</span>
-            <span>{modelIds.length} models accessible to this key</span>
+            <span>{modelIds.length} models on this key</span>
           </button>
           {modelsOpen && (
-            <div style={{
-              display: 'flex', flexWrap: 'wrap', gap: 4,
-              marginTop: 8,
-            }}>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 3, marginTop: 6 }}>
               {modelIds.map((id, i) => (
                 <span key={i} style={{
-                  fontFamily: TD_FONTS.mono, fontSize: 10,
-                  color: t.muted, background: dark ? 'rgba(237,230,214,0.04)' : 'rgba(60,45,30,0.04)',
-                  padding: '2px 7px', borderRadius: 10,
-                  border: `1px solid ${t.hair}`,
-                  whiteSpace: 'nowrap',
+                  fontFamily: TD_FONTS.mono, fontSize: 9.5, color: t.dim,
+                  background: dark ? 'rgba(237,230,214,0.03)' : 'rgba(60,45,30,0.03)',
+                  padding: '1px 6px', borderRadius: 8,
+                  border: `1px solid ${t.hair}`, whiteSpace: 'nowrap',
                 }}>{id}</span>
               ))}
             </div>
