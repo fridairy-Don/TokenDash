@@ -318,11 +318,8 @@ function VD2_Header({ t, dark, route, onSettings, onBack }) {
       </div>
       {!inSettings && (
         <>
-          <IconButton t={t} title="Refresh" onClick={() => postSwift('refresh')}>
-            <svg width="13" height="13" viewBox="0 0 13 13" fill="none">
-              <path d="M11 6.5A4.5 4.5 0 1 1 10 3.5M11 1.5v2.5h-2.5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/>
-            </svg>
-          </IconButton>
+          <RefreshButton t={t} />
+
           <IconButton t={t} title="Settings" onClick={onSettings}>
             <svg width="13" height="13" viewBox="0 0 13 13" fill="none">
               <circle cx="6.5" cy="6.5" r="1.6" stroke="currentColor" strokeWidth="1.2"/>
@@ -337,6 +334,44 @@ function VD2_Header({ t, dark, route, onSettings, onBack }) {
         </>
       )}
     </div>
+  );
+}
+
+// Header refresh button. Does three things the plain IconButton couldn't:
+//  1. Kicks a local `spinning` flag on click so the icon starts rotating
+//     immediately — the user never has to wonder "did it even register?".
+//  2. Keeps spinning while the backend reports footer.live === 'refreshing'
+//     (so if the network is slow the animation accurately shows work).
+//  3. Holds the spin for a minimum 500 ms so very-fast refreshes still
+//     produce a visible tick of feedback rather than a single frame flash.
+function RefreshButton({ t }) {
+  const [spinning, setSpinning] = React.useState(false);
+  const liveRef = React.useRef('live');
+  // Read footer.live off the live dataset every render.
+  const live = (window.TD_DATA && window.TD_DATA.footer && window.TD_DATA.footer.live) || 'live';
+  liveRef.current = live;
+  const serverBusy = live === 'refreshing';
+  const show = spinning || serverBusy;
+
+  const onClick = () => {
+    postSwift('refresh');
+    setSpinning(true);
+    // Spin for at least 500ms; if the server is still refreshing past that,
+    // the `serverBusy` branch keeps the animation going.
+    setTimeout(() => setSpinning(false), 500);
+  };
+
+  return (
+    <IconButton t={t} title="Refresh" onClick={onClick}>
+      <svg
+        width="13" height="13" viewBox="0 0 13 13" fill="none"
+        style={{
+          animation: show ? 'td-spin 0.75s linear infinite' : 'none',
+          transformOrigin: '50% 50%',
+        }}>
+        <path d="M11 6.5A4.5 4.5 0 1 1 10 3.5M11 1.5v2.5h-2.5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/>
+      </svg>
+    </IconButton>
   );
 }
 

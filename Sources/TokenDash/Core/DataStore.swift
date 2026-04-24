@@ -9,6 +9,11 @@ final class DataStore: ObservableObject {
 
     private var providers: [UsageProvider]
     private var timer: Timer?
+    // If a manual refresh click lands while an auto-cycle is already running,
+    // we used to silently drop it — which made the button feel broken. Now we
+    // queue it: run it once the in-flight cycle finishes. Auto-timer ticks
+    // stay coalesced (no pile-up) because they don't set this flag.
+    private var pendingRefresh: Bool = false
 
     init() {
         // Always-on built-ins plus any extras the user has added in Settings.
@@ -36,12 +41,30 @@ final class DataStore: ObservableObject {
         }
     }
 
+    /// Called by the header's refresh icon. Guarantees the click produces a
+    /// fresh fetch even if an auto-refresh was already in flight: instead of
+    /// dropping the click, we mark it pending and re-enter once the current
+    /// cycle finishes.
+    func requestManualRefresh() {
+        if isRefreshing {
+            pendingRefresh = true
+            return
+        }
+        Task { await self.refreshAll() }
+    }
+
     func refreshAll() async {
         if isRefreshing { return }
         isRefreshing = true
         defer {
             isRefreshing = false
             lastRefreshed = Date()
+            // Drain a queued manual click, if any. This is fire-and-forget
+            // so the defer block itself doesn't block.
+            if pendingRefresh {
+                pendingRefresh = false
+                Task { [weak self] in await self?.refreshAll() }
+            }
         }
 
         let providers = self.providers

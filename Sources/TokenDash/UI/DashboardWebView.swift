@@ -117,7 +117,9 @@ struct DashboardWebView: NSViewRepresentable {
             }
             switch body {
             case "refresh":
-                Task { await self.store?.refreshAll() }
+                // Goes through the manual path so a click during an in-flight
+                // auto-cycle is queued, not silently dropped.
+                self.store?.requestManualRefresh()
             case "quit":
                 NSApp.terminate(nil)
             default: break
