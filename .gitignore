@@ -3,3 +3,5 @@
 TokenDash.app/
 *.o
 *.d
+
+.claude/
