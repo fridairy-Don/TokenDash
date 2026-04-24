@@ -1711,12 +1711,22 @@ function VD2_RouterDrawer({ t, d }) {
 function RouterOverviewTab({ t, d, fmtInt }) {
   const dark = t.ink === VD2_DARK.ink;
   const daily = d.dailySpend || [];
-  const tiles = [
-    { k: 'Today',       v: d.spendToday || '$0.00' },
-    { k: 'Reqs today',  v: fmtInt(d.reqsToday) },
-    { k: '7-day spend', v: d.spend7d || '$0.00' },
-    { k: '7-day reqs',  v: fmtInt(d.reqs7d) },
-  ];
+  // Inference-scoped keys (sk-or-v1-…) can't call /activity, so request
+  // counts + per-model breakdown are unavailable. Spend tiles still work
+  // because they're derived from cumulative total_usage deltas we snapshot
+  // locally every 30s — no account permission needed.
+  const unavailable = String(d.activityUnavailable || '') === 'true';
+  const tiles = unavailable
+    ? [
+        { k: 'Today',       v: d.spendToday || '$0.00' },
+        { k: '7-day spend', v: d.spend7d    || '$0.00' },
+      ]
+    : [
+        { k: 'Today',       v: d.spendToday || '$0.00' },
+        { k: 'Reqs today',  v: fmtInt(d.reqsToday) },
+        { k: '7-day spend', v: d.spend7d    || '$0.00' },
+        { k: '7-day reqs',  v: fmtInt(d.reqs7d) },
+      ];
   const bars = daily.map((dpt) => ({ value: dpt.spend || 0 }));
   const tipFor = (i) => {
     const dpt = daily[i];
@@ -1727,8 +1737,27 @@ function RouterOverviewTab({ t, d, fmtInt }) {
 
   return (
     <div>
+      {unavailable && (
+        <div style={{
+          marginBottom: 10, padding: '8px 10px',
+          background: t.compactBg, border: `1px solid ${t.hair}`, borderRadius: 6,
+          fontFamily: TD_FONTS.serif, fontStyle: 'italic',
+          fontSize: 10.5, color: t.dim, lineHeight: 1.45,
+        }}>
+          Request counts and per-model breakdown need a{' '}
+          <a
+            href="#" onClick={(e) => {
+              e.preventDefault();
+              postSwift('open-url:https://openrouter.ai/settings/provisioning-keys');
+            }}
+            style={{ color: t.ink, textDecoration: 'underline' }}
+          >management key</a>.
+          {' '}Spend numbers below are derived from your credit balance and are accurate.
+        </div>
+      )}
       <div style={{
-        display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr',
+        display: 'grid',
+        gridTemplateColumns: unavailable ? '1fr 1fr' : '1fr 1fr 1fr 1fr',
         gap: 8, marginBottom: 10,
       }}>
         {tiles.map((x, i) => (
@@ -1771,7 +1800,9 @@ function RouterOverviewTab({ t, d, fmtInt }) {
         </div>
       )}
 
-      {/* 7-day spend chart */}
+      {/* 7-day spend chart — only when we have real /activity rows (day-
+          by-day). The intraday-delta fallback gives us today + a weekly
+          total, but not per-day resolution. */}
       {bars.length > 0 && (
         <div>
           <div style={{
@@ -1803,11 +1834,25 @@ function RouterOverviewTab({ t, d, fmtInt }) {
 // that needs more round-trips.
 function RouterModelsTab({ t, d, fmtInt, fmtUsd }) {
   const models = d.allModels || d.topModels || [];
+  const unavailable = String(d.activityUnavailable || '') === 'true';
   if (models.length === 0) {
     return (
       <div style={{
         fontFamily: TD_FONTS.serif, fontStyle: 'italic', fontSize: 11, color: t.dim,
-      }}>No model activity recorded in the last 7 days.</div>
+        lineHeight: 1.5,
+      }}>
+        {unavailable ? (
+          <>
+            Per-model breakdown requires a{' '}
+            <a href="#" onClick={(e) => {
+              e.preventDefault();
+              postSwift('open-url:https://openrouter.ai/settings/provisioning-keys');
+            }} style={{ color: t.ink, textDecoration: 'underline' }}>
+              management key
+            </a>. Inference keys (sk-or-v1-…) can't read <span style={{ fontFamily: TD_FONTS.mono }}>/activity</span>.
+          </>
+        ) : 'No model activity recorded in the last 7 days.'}
+      </div>
     );
   }
   // Is the activity endpoint providing token counts? If not, we hide the
@@ -1887,11 +1932,25 @@ function RouterModelsTab({ t, d, fmtInt, fmtUsd }) {
 function RouterActivityTab({ t, d, fmtInt, fmtUsd }) {
   const dark = t.ink === VD2_DARK.ink;
   const daily = d.dailySpend || [];
+  const unavailable = String(d.activityUnavailable || '') === 'true';
   if (daily.length === 0) {
     return (
       <div style={{
         fontFamily: TD_FONTS.serif, fontStyle: 'italic', fontSize: 11, color: t.dim,
-      }}>No daily activity data available (OpenRouter /v1/activity may be unavailable on this account).</div>
+        lineHeight: 1.5,
+      }}>
+        {unavailable ? (
+          <>
+            Daily breakdown requires a{' '}
+            <a href="#" onClick={(e) => {
+              e.preventDefault();
+              postSwift('open-url:https://openrouter.ai/settings/provisioning-keys');
+            }} style={{ color: t.ink, textDecoration: 'underline' }}>
+              management key
+            </a>. Today&apos;s and 7-day totals in the Overview tab are derived from credit balance changes and are accurate.
+          </>
+        ) : 'No daily activity data available yet.'}
+      </div>
     );
   }
   const bars = daily.map(dpt => ({ value: dpt.spend || 0 }));

@@ -265,6 +265,57 @@ final class PersistentStore {
         return out
     }
 
+    /// Cumulative-spend variant of `intradayCredits` — used by OpenRouter,
+    /// whose API exposes `total_usage` (monotonic) but no daily breakdown for
+    /// inference-scoped keys. "Spent today" = current − earliest-today sample.
+    func intradaySpend(provider: String) -> [(ts: Date, spend: Double)] {
+        guard openedOK else { return [] }
+        let startOfToday = Int(Calendar.current.startOfDay(for: Date()).timeIntervalSince1970)
+        let sql = """
+        SELECT ts, spend_usd FROM snapshots
+        WHERE provider = ? AND ts >= ? AND spend_usd IS NOT NULL
+        ORDER BY ts ASC;
+        """
+        var out: [(Date, Double)] = []
+        queue.sync { [db] in
+            var sb: OpaquePointer?
+            if sqlite3_prepare_v2(db, sql, -1, &sb, nil) == SQLITE_OK {
+                sqlite3_bind_text(sb, 1, provider, -1, Self.SQLITE_TRANSIENT)
+                sqlite3_bind_int64(sb, 2, Int64(startOfToday))
+                while sqlite3_step(sb) == SQLITE_ROW {
+                    let ts = Date(timeIntervalSince1970: TimeInterval(sqlite3_column_int64(sb, 0)))
+                    let spend = sqlite3_column_double(sb, 1)
+                    out.append((ts, spend))
+                }
+            }
+            sqlite3_finalize(sb)
+        }
+        return out
+    }
+
+    /// Spend snapshot closest to `t` going backward. Parallels `creditsAt`.
+    func spendAt(provider: String, atOrBefore t: Date) -> Double? {
+        guard openedOK else { return nil }
+        let sql = """
+        SELECT spend_usd FROM snapshots
+        WHERE provider = ? AND spend_usd IS NOT NULL AND ts <= ?
+        ORDER BY ts DESC LIMIT 1;
+        """
+        var out: Double?
+        queue.sync { [db] in
+            var sb: OpaquePointer?
+            if sqlite3_prepare_v2(db, sql, -1, &sb, nil) == SQLITE_OK {
+                sqlite3_bind_text(sb, 1, provider, -1, Self.SQLITE_TRANSIENT)
+                sqlite3_bind_int64(sb, 2, Int64(t.timeIntervalSince1970))
+                if sqlite3_step(sb) == SQLITE_ROW {
+                    out = sqlite3_column_double(sb, 0)
+                }
+            }
+            sqlite3_finalize(sb)
+        }
+        return out
+    }
+
     /// Credits snapshot closest to `t` going backward (most-recent sample at-or-before).
     /// Used for "1h ago" / "24h ago" baselines when computing burn rate.
     func creditsAt(provider: String, atOrBefore t: Date) -> Double? {

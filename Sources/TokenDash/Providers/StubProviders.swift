@@ -279,8 +279,23 @@ final class OpenRouterProvider: UsageProvider {
             let spend = String(format: "$%.2f spent", c.total_usage)
 
             // Activity: per-model breakdown + today/7-day spend and reqs.
-            // The endpoint may 404 on some accounts — we silently skip.
-            let activity = (try? await fetchActivity(key: key)) ?? ActivityAggregate()
+            // OpenRouter restricts /activity to "management keys" — inference
+            // keys (sk-or-v1-…) get a 403 with the message:
+            //   "Only management keys can fetch activity for an account"
+            // That's the common case, so we distinguish "unavailable" (403)
+            // from "empty" and fall back to intraday-delta math derived from
+            // total_usage, which we snapshot every 30s.
+            var activity = ActivityAggregate()
+            var activityUnavailable = false
+            do {
+                activity = try await fetchActivity(key: key)
+            } catch let APIError.httpStatus(code, _) where code == 403 || code == 401 {
+                activityUnavailable = true
+            } catch {
+                // Transient/decode errors — treat as empty but not as a
+                // permanent "unavailable" so we don't tell the user to go
+                // rotate a key when it's really just a flaky network.
+            }
             // Full per-model list (drawer shows up to 8); card still uses top 3.
             let topModels: [[String: Any]] = activity.byModel.prefix(3).map { entry in
                 [
@@ -322,8 +337,34 @@ final class OpenRouterProvider: UsageProvider {
                 ]
             }
 
-            // Burn rate math — only meaningful if activity responded.
-            let burnPerDay = activity.totalSpend7d / 7.0
+            // Fallback today-spend + 7d-spend, derived from the cumulative
+            // spend series we record ourselves. total_usage is monotonic, so
+            // delta against earliest-today sample = today's burn; delta
+            // against 7-day-ago sample = last week's burn. This activates
+            // from the second refresh of the day for `spendToday`, and from
+            // day 8 for `spend7d` — strictly better than showing 0s.
+            let intraday = PersistentStore.shared.intradaySpend(provider: id)
+            let spendTodayFallback: Double = {
+                guard let first = intraday.first else { return 0 }
+                return max(0, c.total_usage - first.spend)
+            }()
+            let sevenDaysAgo = Calendar.current.date(byAdding: .day, value: -7, to: Date())!
+            let spend7dFallback: Double = {
+                guard let past = PersistentStore.shared.spendAt(provider: id, atOrBefore: sevenDaysAgo) else {
+                    return 0
+                }
+                return max(0, c.total_usage - past)
+            }()
+
+            // Prefer real activity when we have it; otherwise fall back.
+            let spendTodayFinal = activity.spendToday > 0 ? activity.spendToday : spendTodayFallback
+            let spend7dFinal    = activity.totalSpend7d > 0 ? activity.totalSpend7d : spend7dFallback
+
+            // Burn rate averages the 7-day window; on day 1 just extrapolates
+            // today's spend, rounded up so daysLeft isn't wildly optimistic.
+            let burnPerDay: Double = spend7dFinal > 0
+                ? spend7dFinal / 7.0
+                : spendTodayFinal
             let daysLeft: Int? = burnPerDay > 0.001
                 ? Int((remaining / burnPerDay).rounded(.down))
                 : nil
@@ -340,12 +381,18 @@ final class OpenRouterProvider: UsageProvider {
                 "spendLabel": spend,
                 "spendUsd": String(c.total_usage),
                 "creditsUsd": String(remaining),
-                "spendToday":   String(format: "$%.2f", activity.spendToday),
+                "spendToday":   String(format: "$%.2f", spendTodayFinal),
                 "reqsToday":    "\(activity.reqsToday)",
-                "spend7d":      String(format: "$%.2f", activity.totalSpend7d),
+                "spend7d":      String(format: "$%.2f", spend7dFinal),
                 "reqs7d":       "\(activity.totalReqs7d)",
                 "burnPerDay":   String(format: "$%.2f", burnPerDay),
             ]
+            if activityUnavailable {
+                // UI uses this to hide request counts / model breakdown and
+                // surface a one-liner explaining why a management key is
+                // needed for granular data.
+                extras["activityUnavailable"] = "true"
+            }
             // Only emit pct when we actually have a budget to compare
             // against (credits > 0). Prevents pay-as-you-go-with-no-cap
             // accounts from showing a misleading 0% or 100% in the dot.
