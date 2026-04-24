@@ -60,12 +60,22 @@ final class ClaudeCodeProvider: UsageProvider {
             let fallbackName = Self.projectName(from: url)
             parseFile(url: url) { evt in
                 let ts = evt.ts
-                // --- message counting (both user and assistant lines) ---
-                if ts >= startOfToday { messagesToday += 1 }
-                if ts >= sevenDaysAgo { messagesWeek += 1 }
-                if ts >= startOfMonth { messagesMonth += 1 }
+                // --- message counting ---
+                // Only real conversational turns count. Pure tool_result user
+                // lines and pure tool_use assistant lines are machinery, not
+                // messages — including them inflated the counter ~10× on
+                // heavy tool-use days.
+                if evt.isConversational {
+                    if ts >= startOfToday { messagesToday += 1 }
+                    if ts >= sevenDaysAgo { messagesWeek += 1 }
+                    if ts >= startOfMonth { messagesMonth += 1 }
+                }
                 // --- peak hour histogram ---
-                if ts >= cal.date(byAdding: .day, value: -30, to: startOfToday)! {
+                // Also restricted to conversational turns so the "Peak hour"
+                // stat reflects when you actually talked to Claude, not when
+                // the agent happened to be hammering tools.
+                if evt.isConversational,
+                   ts >= cal.date(byAdding: .day, value: -30, to: startOfToday)! {
                     let hr = cal.component(.hour, from: ts)
                     hourBuckets[hr] += 1
                 }
@@ -311,6 +321,14 @@ final class ClaudeCodeProvider: UsageProvider {
         let sessionId: String?
         let cwd: String?
         let tokens: TokenTotals?
+        // True iff this line represents a real conversational turn — a user
+        // message the human typed, or an assistant reply that contains text
+        // the user would have read. False for tool_result payloads (stored
+        // as type:"user" in the JSONL but are machine-generated) and for
+        // pure tool_use assistant lines (Claude calling grep/read/bash).
+        // Used to power the "Messages today" counter, which otherwise
+        // inflates 10×+ on heavy tool-use days.
+        let isConversational: Bool
     }
 
     private func parseFile(url: URL, sink: (ParsedEvent) -> Void) {
@@ -363,8 +381,8 @@ final class ClaudeCodeProvider: UsageProvider {
 
         var model: String? = nil
         var tokens: TokenTotals? = nil
-        if kind == .assistant,
-           let message = obj["message"] as? [String: Any] {
+        let message = obj["message"] as? [String: Any]
+        if kind == .assistant, let message = message {
             model = message["model"] as? String
             if let usage = message["usage"] as? [String: Any] {
                 tokens = TokenTotals(
@@ -377,7 +395,39 @@ final class ClaudeCodeProvider: UsageProvider {
             }
         }
 
-        sink(ParsedEvent(ts: ts, kind: kind, model: model, sessionId: sessionId, cwd: cwd, tokens: tokens))
+        // Decide whether this line is a real "message" for the Messages-today
+        // counter. Two failure modes we need to reject:
+        //   - user lines that are just tool_result payloads (the bytes a
+        //     tool produced flowing back into Claude) — these dominate
+        //     agentic sessions and have nothing to do with what the user
+        //     typed.
+        //   - assistant lines that contain only tool_use blocks (Claude
+        //     deciding to call a tool). These are not a message the user
+        //     would have read.
+        let isConversational: Bool = {
+            guard let message = message else { return kind == .user }
+            let content = message["content"]
+            // String content = plain typed text (user) or plain reply (assistant).
+            if content is String { return true }
+            guard let blocks = content as? [[String: Any]] else { return false }
+            if blocks.isEmpty { return false }
+            switch kind {
+            case .user:
+                // Typed if ANY block is not a tool_result.
+                return blocks.contains { ($0["type"] as? String) != "tool_result" }
+            case .assistant:
+                // Conversational if ANY block is text (ignore tool_use-only turns).
+                return blocks.contains { ($0["type"] as? String) == "text" }
+            case .other:
+                return false
+            }
+        }()
+
+        sink(ParsedEvent(
+            ts: ts, kind: kind, model: model,
+            sessionId: sessionId, cwd: cwd, tokens: tokens,
+            isConversational: isConversational
+        ))
     }
 
     private func prettyModel(_ raw: String) -> String {
